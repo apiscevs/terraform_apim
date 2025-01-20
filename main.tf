@@ -96,8 +96,8 @@ resource "azurerm_api_management_api" "petstore_api" {
   protocols    = ["https"]
 
   import {
-    content_format = "swagger-link-json"
-    content_value  = "https://petstore.swagger.io/v2/swagger.json"
+    content_format = "swagger-json"
+    content_value  = file("${path.root}/APIM/OpenApi/swagger.json")
   }
 }
 
@@ -227,6 +227,8 @@ resource "azurerm_api_management_api_policy" "petstore_api_policy" {
       }" />
             <audiences>
                 <audience>{{atom_audience}}</audience>
+<audience>{{atom_audience}}</audience>
+<audience>{{atom_audience}}</audience>
             </audiences>
         </validate-jwt>
         <!-- Validate request body JSON -->
