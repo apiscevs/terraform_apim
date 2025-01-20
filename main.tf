@@ -22,43 +22,33 @@ provider "azurerm" {
 # 1. Resource Group
 # ----------------------------------------------------------
 resource "azurerm_resource_group" "apim_resource_group" {
-  name     = "example-apim-rg"
-  location = "West Europe"
+  name     = var.rg_apim.name
+  location = var.rg_apim.location
 }
 
 # ----------------------------------------------------------
 # 2. API Management Service
 # ----------------------------------------------------------
 resource "azurerm_api_management" "apim_service" {
-  name                = "apim-apiscevs-v2"
+  name                = var.apim_service.name
   location            = azurerm_resource_group.apim_resource_group.location
   resource_group_name = azurerm_resource_group.apim_resource_group.name
-  publisher_name      = "My Company"
-  publisher_email     = "company@terraform.io"
+  publisher_name      = var.apim_service.publisher_name
+  publisher_email     = var.apim_service.publisher_email
 
-  sku_name = "Developer_1" # Format: "SKUName_Capacity"
+  sku_name = var.apim_service.sku_name
 }
 
 # ----------------------------------------------------------
 # 3. Named Values
 # ----------------------------------------------------------
-resource "azurerm_api_management_named_value" "apim_named_value" {
-  api_management_name = azurerm_api_management.apim_service.name
-  resource_group_name = azurerm_resource_group.apim_resource_group.name
-
-  name         = "example-named-value"
-  display_name = "Example_Named_Value"
-  value        = "dummy-secret-value"
-  tags         = ["example", "demo"]
-}
-
 resource "azurerm_api_management_named_value" "apim_audience" {
   api_management_name = azurerm_api_management.apim_service.name
   resource_group_name = azurerm_resource_group.apim_resource_group.name
 
-  name         = "atom_audience"
-  display_name = "atom_audience"
-  value        = "atom-local-http-access-token"
+  name         = var.audience.name
+  display_name = var.audience.display_Name
+  value        = var.audience.value
   tags         = ["security", "jwt"]
 }
 
@@ -69,16 +59,10 @@ resource "azurerm_api_management_backend" "apim_backend" {
   api_management_name = azurerm_api_management.apim_service.name
   resource_group_name = azurerm_resource_group.apim_resource_group.name
 
-  name        = "petstore-backend"
-  description = "Backend for Swagger Petstore API"
-  url         = "https://petstore.swagger.io/v2"
-  protocol    = "http"
-
-  credentials {
-    header = {
-      Authorization = "Bearer some-token" # Use a map for headers
-    }
-  }
+  name        = var.apim_atom_backend.name
+  description = var.apim_atom_backend.description
+  url         = var.apim_atom_backend.url
+  protocol    = var.apim_atom_backend.protocol
 }
 
 # ----------------------------------------------------------
@@ -86,18 +70,18 @@ resource "azurerm_api_management_backend" "apim_backend" {
 #    Imports the Petstore Swagger JSON.
 # ----------------------------------------------------------
 resource "azurerm_api_management_api" "petstore_api" {
-  name                = "petstore-api"
+  name                = var.petstore_api_config.name
   api_management_name = azurerm_api_management.apim_service.name
   resource_group_name = azurerm_resource_group.apim_resource_group.name
 
-  display_name = "Petstore API"
-  revision     = "1"
-  path         = "petstore"
+  display_name = var.petstore_api_config.display_name
+  revision     = var.petstore_api_config.revision
+  path         = var.petstore_api_config.path
   protocols    = ["https"]
 
   import {
-    content_format = "swagger-json"
-    content_value  = file("${path.root}/APIM/OpenApi/swagger.json")
+    content_format = var.petstore_api_config.content_format
+    content_value  = file("${path.root}/${var.petstore_api_config.swagger_file}")
   }
 }
 
@@ -109,13 +93,13 @@ resource "azurerm_api_management_product" "sfmp_product" {
   api_management_name = azurerm_api_management.apim_service.name
   resource_group_name = azurerm_resource_group.apim_resource_group.name
 
-  product_id   = "sfmp"
-  display_name = "SFMP Product"
-  description  = "This product contains APIs for SFMP"
-  terms        = "By using this API, you agree to the terms and conditions."
-  subscription_required = false
-  approval_required     = false
-  published             = true
+  product_id            = var.sfmp_product_config.product_id
+  display_name          = var.sfmp_product_config.display_name
+  description           = var.sfmp_product_config.description
+  terms                 = var.sfmp_product_config.terms
+  subscription_required = var.sfmp_product_config.subscription_required
+  approval_required     = var.sfmp_product_config.approval_required
+  published             = var.sfmp_product_config.published
 
   depends_on = [azurerm_api_management.apim_service]
 }
