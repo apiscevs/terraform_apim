@@ -40,7 +40,7 @@ variable "apim_service" {
   }
 }
 
-variable "apim_atom_backend" {
+variable "apim_atom_backend_dev1" {
   type = object({
     name     = string
     description = string
@@ -49,14 +49,30 @@ variable "apim_atom_backend" {
   })
 
   default = {
-    name     = "petstore-backend"
+    name     = "petstore-backend-dev1"
     description = "Backend for Swagger Petstore API"
     url = "https://petstore.swagger.io/v2"
     protocol = "http"
   }
 }
 
-variable "petstore_api_config" {
+variable "apim_atom_backend_dev2" {
+  type = object({
+    name     = string
+    description = string
+    url = string
+    protocol = string
+  })
+
+  default = {
+    name     = "petstore-backend-dev2"
+    description = "Backend for Swagger Petstore API"
+    url = "https://petstore.swagger.io/v2"
+    protocol = "http"
+  }
+}
+
+variable "petstore_api_config_dev1" {
   type = object({
     name            = string
     display_name    = string
@@ -66,16 +82,35 @@ variable "petstore_api_config" {
     swagger_file    = string
   })
   default = {
-    name            = "petstore-api"
-    display_name    = "Petstore API"
+    name            = "petstore-api-dev1"
+    display_name    = "Petstore API dev1"
     revision        = "1"
-    path            = "petstore"
+    path            = "dev1/petstore"
     content_format  = "swagger-json"
     swagger_file    = "APIM/OpenApi/swagger.json"  # Relative path without ${path.root}
   }
 }
 
-variable "sfmp_product_config" {
+variable "petstore_api_config_dev2" {
+  type = object({
+    name            = string
+    display_name    = string
+    revision        = string
+    path            = string
+    content_format  = string
+    swagger_file    = string
+  })
+  default = {
+    name            = "petstore-api-dev2"
+    display_name    = "Petstore API dev2"
+    revision        = "1"
+    path            = "dev2/petstore"
+    content_format  = "swagger-json"
+    swagger_file    = "APIM/OpenApi/swagger.json"  # Relative path without ${path.root}
+  }
+}
+
+variable "sfmp_product_config_dev1" {
   type = object({
     product_id            = string
     display_name          = string
@@ -87,10 +122,32 @@ variable "sfmp_product_config" {
   })
 
   default = {
-    product_id            = "sfmp"
-    display_name          = "SFMP Product"
-    description           = "This product contains APIs for SFMP"
-    terms                 = "By using this API, you agree to the terms and conditions."
+    product_id            = "sfmp_dev1"
+    display_name          = "SFMP Product dev1"
+    description           = "This product contains APIs for SFMP dev1"
+    terms                 = "By using this API, you agree to the terms and conditions. dev1"
+    subscription_required = false
+    approval_required     = false
+    published             = true
+  }
+}
+
+variable "sfmp_product_config_dev2" {
+  type = object({
+    product_id            = string
+    display_name          = string
+    description           = string
+    terms                 = string
+    subscription_required = bool
+    approval_required     = bool
+    published             = bool
+  })
+
+  default = {
+    product_id            = "sfmp_dev2"
+    display_name          = "SFMP Product dev2"
+    description           = "This product contains APIs for SFMP dev2"
+    terms                 = "By using this API, you agree to the terms and conditions. dev2"
     subscription_required = false
     approval_required     = false
     published             = true
