@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "4.15.0"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.9"
+    }
   }
 }
 
@@ -165,7 +169,7 @@ locals{
 }
 
 # ----------------------------------------------------------
-# 1. Resource Group
+# 1. Resource Group.
 # ----------------------------------------------------------
 resource "azurerm_resource_group" "apim_resource_group" {
   name     = var.rg_apim.name
