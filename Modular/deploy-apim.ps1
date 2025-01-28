@@ -93,7 +93,20 @@ Write-Host "Swagger File Path: $SwaggerFilePath"
 Write-Host "Policy File Path: $PolicyFilePath"
 Write-Host "Backend ID: $BackendId"
 
+# Authenticate using the provided service principal credentials
 Write-Host "Authenticating to Azure with service principal credentials..."
+try {
+    $SecurePassword = ConvertTo-SecureString -String $ClientSecret -AsPlainText -Force
+    $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $ClientId, $SecurePassword
+
+    Connect-AzAccount -ServicePrincipal -Tenant $TenantId -Credential $Credential
+
+    Write-Host "Authenticated to Azure successfully."
+}
+catch {
+    Write-Error "Failed to authenticate to Azure. Ensure the credentials are correct. $_"
+    exit 1
+}
 
 # Read and replace placeholders in-memory without saving to files
 try {
