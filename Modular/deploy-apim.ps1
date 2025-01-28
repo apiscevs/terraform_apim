@@ -2,10 +2,10 @@ param (
     [Parameter(Mandatory = $true)]
     [string]$EnvironmentName,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$ClientId,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$ClientSecret,
 
     [Parameter(Mandatory = $true)]
@@ -94,17 +94,32 @@ Write-Host "Policy File Path: $PolicyFilePath"
 Write-Host "Backend ID: $BackendId"
 
 # Authenticate using the provided service principal credentials
-Write-Host "Authenticating to Azure with service principal credentials..."
+Write-Host "Authenticating to Azure..."
 try {
-    $SecurePassword = ConvertTo-SecureString -String $ClientSecret -AsPlainText -Force
-    $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $ClientId, $SecurePassword
+    if ($ClientId -and $ClientSecret) {
+        # Service principal authentication
+        Write-Host "Service principal credentials detected. Authenticating using ClientId and ClientSecret..."
+        $SecurePassword = ConvertTo-SecureString -String $ClientSecret -AsPlainText -Force
+        $Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $ClientId, $SecurePassword
 
-    Connect-AzAccount -ServicePrincipal -Tenant $TenantId -Credential $Credential
-
-    Write-Host "Authenticated to Azure successfully."
+        Connect-AzAccount -ServicePrincipal -TenantId $TenantId -Credential $Credential
+        Write-Host "Authenticated successfully using service principal."
+    } else {
+        # Default account authentication with caching
+        Write-Host "No service principal credentials detected. Using cached context or default Connect-AzAccount..."
+        $context = Get-AzContext -ErrorAction SilentlyContinue
+        if (-not $context) {
+            Write-Host "No cached context found. Logging in interactively..."
+            Connect-AzAccount -Subscription $SubscriptionId -Persist
+        } else {
+            Write-Host "Using cached context for authentication."
+            Set-AzContext -Context $context
+        }
+        Write-Host "Authenticated successfully using the default admin account."
+    }
 }
 catch {
-    Write-Error "Failed to authenticate to Azure. Ensure the credentials are correct. $_"
+    Write-Error "Failed to authenticate to Azure. $_"
     exit 1
 }
 
