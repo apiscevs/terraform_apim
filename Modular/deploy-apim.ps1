@@ -15,23 +15,45 @@ param (
 # Define the base configuration folder
 $BaseConfigFolder = Join-Path -Path (Split-Path -Parent $MyInvocation.MyCommand.Path) -ChildPath "Configuration"
 
-# Define the specific environment folder
-$EnvConfigFolder = Join-Path -Path $BaseConfigFolder -ChildPath $EnvironmentName
+# Define the specific environment file path
+$ConfigFilePath = Join-Path -Path $BaseConfigFolder -ChildPath "Environments\$EnvironmentName.json"
 
-# Define paths for the configuration, policy, and swagger files
-$ConfigFilePath = Join-Path -Path $EnvConfigFolder -ChildPath "configuration.json"
-$PolicyFilePath = Join-Path -Path $EnvConfigFolder -ChildPath "Policy\api-shared-policy.xml"
-$SwaggerFilePath = Join-Path -Path $EnvConfigFolder -ChildPath "Swagger\swagger.json"
-
-# Check if the environment folder exists
-if (-not (Test-Path $EnvConfigFolder)) {
-    Write-Error "Environment folder not found: $EnvConfigFolder"
-    exit 1
-}
+# Define shared paths for policy and swagger files
+$PolicyFilePath = Join-Path -Path $BaseConfigFolder -ChildPath "Shared\Policies\api-shared-policy.xml"
+$SwaggerFilePath = Join-Path -Path $BaseConfigFolder -ChildPath "Shared\Swagger\swagger.json"
 
 # Check if the configuration file exists
 if (-not (Test-Path $ConfigFilePath)) {
     Write-Error "Configuration file not found at path: $ConfigFilePath"
+    exit 1
+}
+
+# Load configuration from the JSON file
+try {
+    $EnvConfig = Get-Content -Path $ConfigFilePath | ConvertFrom-Json
+    $ResourceGroupName = $EnvConfig.ResourceGroupName
+    $ApimName = $EnvConfig.ApimName
+    $TenantId = $EnvConfig.TenantId
+    $SubscriptionId = $EnvConfig.SubscriptionId
+    $BackendId = $EnvConfig.BackendId
+    $ProductId = $EnvConfig.ProductId
+
+    # Ensure CORS origins is an array before transforming to XML format
+    $CorsOrigins = (@($EnvConfig.CorsOrigins) | ForEach-Object { "<origin>$_</origin>" }) -join "`n        "
+}
+catch {
+    Write-Error "Failed to load or parse configuration file: $ConfigFilePath. $_"
+    exit 1
+}
+
+# Check if the policy and swagger files exist
+if (-not (Test-Path $PolicyFilePath)) {
+    Write-Error "Policy file not found at path: $PolicyFilePath"
+    exit 1
+}
+
+if (-not (Test-Path $SwaggerFilePath)) {
+    Write-Error "Swagger file not found at path: $SwaggerFilePath"
     exit 1
 }
 
