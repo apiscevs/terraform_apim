@@ -1,0 +1,12 @@
+{
+  "ResourceGroupName": "example-apim-rg",
+  "ApimName": "apim-apiscevs-v2",
+  "TenantId": "bf51672f-41d2-4950-9cb3-d2182b0865f8",
+  "SubscriptionId": "0be16117-cc59-4569-8479-007b4054638a",
+  "CorsOrigins": [
+    "https://dev3-cors.com",
+    "https://dev3-cors.com"
+  ],
+  "BackendId": "backend-dev3",
+  "ProductId": "sfmp_dev1"
+}

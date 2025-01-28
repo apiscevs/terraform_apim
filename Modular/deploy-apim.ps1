@@ -1,15 +1,6 @@
 param (
     [Parameter(Mandatory = $true)]
-    [string]$ResourceGroupName,
-
-    [Parameter(Mandatory = $true)]
-    [string]$ApimName,
-
-    [Parameter(Mandatory = $true)]
-    [string]$SwaggerFilePath,
-
-    [Parameter(Mandatory = $true)]
-    [string]$PolicyFilePath,
+    [string]$EnvironmentName,
 
     [Parameter(Mandatory = $true)]
     [string]$ClientId,
@@ -18,25 +9,83 @@ param (
     [string]$ClientSecret,
 
     [Parameter(Mandatory = $true)]
-    [string]$TenantId,
-
-    [Parameter(Mandatory = $true)]
-    [string]$SubscriptionId,
-
-    [Parameter(Mandatory = $true)]
     [string]$ApiRevision
 )
 
-Write-Host "Authenticating to Azure with service principal credentials..."
+# Define the base configuration folder
+$BaseConfigFolder = Join-Path -Path (Split-Path -Parent $MyInvocation.MyCommand.Path) -ChildPath "Configuration"
 
-# Authenticate to Azure
+# Define the specific environment folder
+$EnvConfigFolder = Join-Path -Path $BaseConfigFolder -ChildPath $EnvironmentName
+
+# Define paths for the configuration, policy, and swagger files
+$ConfigFilePath = Join-Path -Path $EnvConfigFolder -ChildPath "configuration.json"
+$PolicyFilePath = Join-Path -Path $EnvConfigFolder -ChildPath "Policy\api-shared-policy.xml"
+$SwaggerFilePath = Join-Path -Path $EnvConfigFolder -ChildPath "Swagger\swagger.json"
+
+# Check if the environment folder exists
+if (-not (Test-Path $EnvConfigFolder)) {
+    Write-Error "Environment folder not found: $EnvConfigFolder"
+    exit 1
+}
+
+# Check if the configuration file exists
+if (-not (Test-Path $ConfigFilePath)) {
+    Write-Error "Configuration file not found at path: $ConfigFilePath"
+    exit 1
+}
+
+# Load configuration from the JSON file
 try {
-    $secureClientSecret = ConvertTo-SecureString -String $ClientSecret -AsPlainText -Force
-    $psCred = New-Object System.Management.Automation.PSCredential($ClientId, $secureClientSecret)
-    Connect-AzAccount -ServicePrincipal -Tenant $TenantId -Credential $psCred
+    $EnvConfig = Get-Content -Path $ConfigFilePath | ConvertFrom-Json
+    $ResourceGroupName = $EnvConfig.ResourceGroupName
+    $ApimName = $EnvConfig.ApimName
+    $TenantId = $EnvConfig.TenantId
+    $SubscriptionId = $EnvConfig.SubscriptionId
+    $BackendId = $EnvConfig.BackendId
+    $ProductId = $EnvConfig.ProductId 
+    
+    # Ensure CORS origins is an array before transforming to XML format
+    $CorsOrigins = (@($EnvConfig.CorsOrigins) | ForEach-Object { "<origin>$_</origin>" }) -join "`n        "
 }
 catch {
-    Write-Error "Failed to authenticate to Azure. $_"
+    Write-Error "Failed to load or parse configuration file: $ConfigFilePath. $_"
+    exit 1
+}
+
+# Check if the policy and swagger files exist
+if (-not (Test-Path $PolicyFilePath)) {
+    Write-Error "Policy file not found at path: $PolicyFilePath"
+    exit 1
+}
+
+if (-not (Test-Path $SwaggerFilePath)) {
+    Write-Error "Swagger file not found at path: $SwaggerFilePath"
+    exit 1
+}
+
+Write-Host "Loaded configuration for environment: $EnvironmentName"
+Write-Host "ResourceGroupName: $ResourceGroupName"
+Write-Host "APIM Name: $ApimName"
+Write-Host "Swagger File Path: $SwaggerFilePath"
+Write-Host "Policy File Path: $PolicyFilePath"
+Write-Host "Backend ID: $BackendId"
+
+Write-Host "Authenticating to Azure with service principal credentials..."
+
+# Read and replace placeholders in-memory without saving to files
+try {
+    $PolicyContent = Get-Content -Path $PolicyFilePath -Raw
+    $UpdatedPolicyContent = $PolicyContent `
+        -replace "__CORS_ORIGINS__", $CorsOrigins `
+        -replace "__BACKEND_ID__", $BackendId
+
+    # Debug: Print final policy content before applying
+    Write-Host "Final Policy Content Being Applied:"
+    Write-Host $UpdatedPolicyContent
+}
+catch {
+    Write-Error "Failed to process policy file. $_"
     exit 1
 }
 
@@ -76,11 +125,51 @@ if (-not $existingRevisions) {
             -SpecificationFormat "OpenApi" `
             -ApiId $baseApiId `
             -Path "my-api" `
-            -Protocol "Https"
+            -Protocol "Https"     
         Write-Host "Base API created and set as current."
     }
     catch {
         Write-Error "Failed to create base API. $_"
+        exit 1
+    }
+    
+    Write-Host "🔧 Disabling subscription requirement for API '$baseApiId' using Azure REST API workaround..."
+    # Existing bug was as usually closed with provided workaround that did not actually work for me.
+    # https://github.com/Azure/azure-powershell/issues/9350   
+    # Switched to RESET API approach    
+    try {
+        # Step 1: Get authentication token (Use -AsSecureString for future compatibility)
+        $secureToken = (Get-AzAccessToken -ResourceUrl "https://management.azure.com" -AsSecureString).Token
+    
+        # Step 2: Convert SecureString to plain text
+        $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+        $token = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+    
+        # Step 3: Build REST API request URL
+        $apiUrl = "https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.ApiManagement/service/$ApimName/apis/$baseApiId" + "?api-version=2021-08-01"
+    
+        # Debugging: Print the API URL to verify
+        Write-Host "API Request URL: $apiUrl"
+    
+        # Step 4: Define the request body to update SubscriptionRequired to false
+        $body = @{
+            properties = @{
+                subscriptionRequired = $false
+            }
+        } | ConvertTo-Json -Depth 3
+    
+        # Step 5: Send the PATCH request to update the API
+        $headers = @{
+            "Authorization" = "Bearer $token"
+            "Content-Type"  = "application/json"
+        }
+    
+        $response = Invoke-RestMethod -Uri $apiUrl -Method Patch -Headers $headers -Body $body -Verbose
+    
+        Write-Host "Subscription requirement disabled successfully for API '$baseApiId'."
+    }
+    catch {
+        Write-Error "Failed to disable subscription requirement using REST API. $_"
         exit 1
     }
 }
@@ -96,13 +185,8 @@ else {
             Write-Host "Marking aged revision '$ApiRevision' as current with a unique release ID..."
             
             try {
-                # Define a unique release ID to trigger a new changelog entry
                 $releaseId = "my-api-release-$ApiRevision-$(Get-Date -Format 'yyyyMMddHHmmss')"
 
-                # Important Note:
-                # When switching an aged revision back to active, we use a unique release ID
-                # to avoid conflicts with existing releases. This approach also creates a new
-                # changelog entry, which makes the switch traceable in the Azure portal.
                 Write-Host "Creating a new release '$releaseId' for aged revision '$ApiRevision'..."
                 New-AzApiManagementApiRelease `
                     -Context $apimContext `
@@ -128,7 +212,6 @@ else {
                 -ApiRevisionDescription "Created by script."
             Write-Host "Revision '$ApiRevision' created successfully."
 
-            # Use a simple release ID for a new revision
             $releaseId = "my-api-release-$ApiRevision"
 
             Write-Host "Creating a new release '$releaseId' for new revision '$ApiRevision'..."
@@ -166,18 +249,57 @@ catch {
     exit 1
 }
 
-# Apply the policy to the current revision
-Write-Host "Applying policy from file: $PolicyFilePath ..."
+# Apply the modified policy **directly** without saving to file
+Write-Host "Applying updated policy..."
 try {
     Set-AzApiManagementPolicy `
         -Context $apimContext `
         -ApiId $baseApiId `
-        -PolicyFilePath $PolicyFilePath
+        -Policy $UpdatedPolicyContent
     Write-Host "Policy set successfully."
 }
 catch {
     Write-Error "Failed to apply policy. $_"
     exit 1
+}
+
+# Associate API with a Product
+if ($EnvConfig.ProductId) {
+    Write-Host "Checking if API '$baseApiId' is already associated with product '$($EnvConfig.ProductId)'..."
+
+    try {
+        # Get all APIs in the APIM instance
+        $allApis = Get-AzApiManagementApi -Context $apimContext
+
+        # Check if our API exists in the list
+        $apiExists = $allApis | Where-Object { $_.ApiId -eq $baseApiId }
+
+        if (-not $apiExists) {
+            Write-Error "API '$baseApiId' does not exist in APIM. Cannot associate with product '$($EnvConfig.ProductId)'."
+            exit 1
+        }
+
+        # Check if our API is already associated with the product
+        $productApis = Get-AzApiManagementProduct -Context $apimContext -ProductId $EnvConfig.ProductId
+        $isApiLinked = $productApis | Where-Object { $_.ApiId -eq $baseApiId }
+
+        if ($isApiLinked) {
+            Write-Host "API '$baseApiId' is already associated with product '$($EnvConfig.ProductId)'. Skipping association."
+        } else {
+            Write-Host "🔗 Associating API '$baseApiId' with product '$($EnvConfig.ProductId)'..."
+            Add-AzApiManagementApiToProduct `
+                -Context $apimContext `
+                -ProductId $EnvConfig.ProductId `
+                -ApiId $baseApiId
+            Write-Host "API successfully associated with product '$($EnvConfig.ProductId)'."
+        }
+    }
+    catch {
+        Write-Error "Failed to associate API with product. $_"
+        exit 1
+    }
+} else {
+    Write-Host "No ProductId found in configuration. Skipping API-product association."
 }
 
 Write-Host "`nDeployment finished successfully!"

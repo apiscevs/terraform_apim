@@ -40,22 +40,6 @@ variable "apim_service" {
   }
 }
 
-variable "apim_atom_backend_dev1" {
-  type = object({
-    name     = string
-    description = string
-    url = string
-    protocol = string
-  })
-
-  default = {
-    name     = "petstore-backend-dev1"
-    description = "Backend for Swagger Petstore API"
-    url = "https://petstore.swagger.io/v2"
-    protocol = "http"
-  }
-}
-
 variable "apim_atom_backend_dev2" {
   type = object({
     name     = string
