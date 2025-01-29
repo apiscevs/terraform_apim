@@ -33,3 +33,51 @@ try {
     # Cleanup temp file
     Remove-Item $TempPolicyFile -Force
 }
+
+
+
+
+
+# Define a temporary policy file with a `.xml` extension
+$TempPolicyFile = [System.IO.Path]::Combine($env:TEMP, "apim-policy.xml")
+Write-Host "Using temp file: $TempPolicyFile"
+
+try {
+    # Read and replace placeholders in the policy file
+    $PolicyContent = Get-Content -Path $PolicyFilePath -Raw
+    $UpdatedPolicyContent = $PolicyContent `
+        -replace "__CORS_ORIGINS__", $CorsOrigins `
+        -replace "__BACKEND_ID__", $BackendId `
+        -replace "__AUDIENCES__", $Audiences
+
+    # Write updated policy to a temp XML file (UTF-8 without BOM)
+    $Utf8NoBomEncoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($TempPolicyFile, $UpdatedPolicyContent, $Utf8NoBomEncoding)
+    Write-Host "Updated policy written to: $TempPolicyFile"
+
+    # Debug: Output policy content before applying
+    Write-Host "Final Policy Content:"
+    Write-Host (Get-Content $TempPolicyFile -Raw)
+}
+catch {
+    Write-Error "Failed to process policy file. $_"
+    exit 1
+}
+
+# Apply the policy from the temporary file
+Write-Host "Applying updated policy..."
+try {
+    Set-AzApiManagementPolicy `
+        -Context $apimContext `
+        -ApiId $baseApiId `
+        -PolicyFilePath $TempPolicyFile  # Now using a `.xml` file
+    Write-Host "Policy set successfully."
+}
+catch {
+    Write-Error "Failed to apply policy. $_"
+    exit 1
+}
+finally {
+    # Cleanup temp file
+    Remove-Item $TempPolicyFile -Force
+}
