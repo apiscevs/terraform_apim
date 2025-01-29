@@ -1,0 +1,13 @@
+$UpdatedPolicyContent = $PolicyContent -replace '(?s)(?<=value=")(.*?)(?=")', {
+    param($m)
+    # '.*?' in conjunction with (?s) allows multiline capturing in a non‐greedy way
+    $escaped = $m.Value
+    # Escape ampersand first (so it won't interfere with the others):
+    $escaped = $escaped -replace '&','&amp;'
+    # Then escape < and >:
+    $escaped = $escaped -replace '<','&lt;'
+    $escaped = $escaped -replace '>','&gt;'
+    # Finally escape double quotes:
+    $escaped = $escaped -replace '"','&quot;'
+    return $escaped
+}
