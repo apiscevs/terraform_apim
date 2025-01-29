@@ -1,13 +1,35 @@
-$UpdatedPolicyContent = $PolicyContent -replace '(?s)(?<=value=")(.*?)(?=")', {
-    param($m)
-    # '.*?' in conjunction with (?s) allows multiline capturing in a non‐greedy way
-    $escaped = $m.Value
-    # Escape ampersand first (so it won't interfere with the others):
-    $escaped = $escaped -replace '&','&amp;'
-    # Then escape < and >:
-    $escaped = $escaped -replace '<','&lt;'
-    $escaped = $escaped -replace '>','&gt;'
-    # Finally escape double quotes:
-    $escaped = $escaped -replace '"','&quot;'
-    return $escaped
+# Define temporary policy file path
+$TempPolicyFile = [System.IO.Path]::GetTempFileName()
+Write-Host "Using temp file: $TempPolicyFile"
+
+try {
+    # Read and replace placeholders in the policy file
+    $PolicyContent = Get-Content -Path $PolicyFilePath -Raw
+    $UpdatedPolicyContent = $PolicyContent `
+        -replace "__CORS_ORIGINS__", $CorsOrigins `
+        -replace "__BACKEND_ID__", $BackendId `
+        -replace "__AUDIENCES__", $Audiences
+
+    # Write updated policy to a temp file
+    $UpdatedPolicyContent | Out-File -FilePath $TempPolicyFile -Encoding utf8
+    Write-Host "Updated policy written to: $TempPolicyFile"
+} catch {
+    Write-Error "Failed to process policy file. $_"
+    exit 1
+}
+
+# Apply the policy from the temporary file
+Write-Host "Applying updated policy..."
+try {
+    Set-AzApiManagementPolicy `
+        -Context $apimContext `
+        -ApiId $baseApiId `
+        -PolicyFilePath $TempPolicyFile  # Use file instead of string
+    Write-Host "Policy set successfully."
+} catch {
+    Write-Error "Failed to apply policy. $_"
+    exit 1
+} finally {
+    # Cleanup temp file
+    Remove-Item $TempPolicyFile -Force
 }
