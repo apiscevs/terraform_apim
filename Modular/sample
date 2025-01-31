@@ -16,3 +16,47 @@ After cloning the repository, run:
 #### **Windows**
 ```cmd
 setup-swagger-link-local-dev.bat
+```cmd
+
+## APIM Deployment Script
+
+### Purpose
+
+`deploy-apim.ps1` automates the management of APIs inside APIM. This is separate from Terraform, which manages APIM resources, products, and backends. The separation ensures that frequently changing components like **Swagger definitions and policies** are handled where they are most cohesive.
+
+### Structure
+
+- **`deploy-apim.ps1`** - Main script for deploying APIs into APIM.
+- **`functions.ps1`** - Contains helper functions used in `deploy-apim.ps1`.
+- **Environment configuration files** (`Configuration/Environments/*.json`) - Define environment-specific API settings like authentication, subscriptions, CORS, backend IDs, and policies.
+
+### How It Works
+
+The script performs the following actions:
+
+- **Upserts** the API into APIM using environment-specific settings.
+- **Associates** the API with the correct APIM product.
+- **Uploads** policy and Swagger files.
+- **Disables** subscription requirements.
+- **Creates new revisions** when needed.
+
+### How to Use
+
+#### **Locally (Authenticated Azure Account)**
+
+```powershell
+./deploy-apim.ps1 -EnvironmentName "dev2" -ApiRevision "rev-123"
+```
+#### **Using Service Principal Authentication**
+```powershell
+./deploy-apim.ps1 -EnvironmentName "dev2" -ApiRevision "rev-456" -ClientId "<client-id>" -ClientSecret "<client-secret>"
+```
+
+
+Prerequisites
+Ensure you have the necessary Azure PowerShell modules installed:
+```powershell
+Install-Module -Name Az.Accounts -Force
+Install-Module -Name Az.APIM -Force
+```
+
