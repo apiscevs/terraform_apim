@@ -1,0 +1,18 @@
+# Scripts for APIM Setup
+
+## Hard Link Setup for Swagger File
+
+### Purpose
+This script (`setup-swagger-link-local-dev.bat`) creates a **hard link** for the Swagger file to avoid manual copying while keeping a **single source of truth**.
+
+### Why?
+- The **Swagger file belongs to the API project** and should stay there.
+- **APIM is API-agnostic** but needs the Swagger file for local development.
+- In **Jenkins**, the file will be **copied before packaging**, ensuring consistency.
+
+### How to Use
+After cloning the repository, run:
+
+#### **Windows**
+```cmd
+setup-swagger-link-local-dev.bat
