@@ -1,0 +1,40 @@
+{
+  "id": "f60a7e0f-468e-4fdf-a875-e01a60909f9f",
+  "Name": "APIM Limited Contributor",
+  "Description": "Allows creating and modifying APIs, but prevents full APIM management.",
+  "Actions": [
+    "Microsoft.ApiManagement/service/apis/write",
+    "Microsoft.ApiManagement/service/backends/write",
+    "Microsoft.ApiManagement/service/namedValues/write",
+    "Microsoft.ApiManagement/service/namedValues/write",
+    "Microsoft.ApiManagement/service/policies/write",
+    "Microsoft.ApiManagement/service/users/token/action"
+  ],
+  "NotActions": [
+    "Microsoft.ApiManagement/service/delete",
+    "Microsoft.ApiManagement/service/write"
+  ],
+  "AssignableScopes": [
+    "/subscriptions/0be16117-cc59-4569-8479-007b4054638a"
+  ]
+}
+
+
+{
+  "Name": "APIM Limited Contributor",
+  "Description": "Allows creating and modifying APIs, but prevents full APIM management.",
+  "Actions": [
+    "Microsoft.ApiManagement/service/apis/write",
+    "Microsoft.ApiManagement/service/backends/write",
+    "Microsoft.ApiManagement/service/namedValues/write",
+    "Microsoft.ApiManagement/service/policies/write",
+    "Microsoft.ApiManagement/service/users/token/action"
+  ],
+  "NotActions": [
+    "Microsoft.ApiManagement/service/delete",
+    "Microsoft.ApiManagement/service/write"
+  ],
+  "AssignableScopes": [
+    "/subscriptions/0be16117-cc59-4569-8479-007b4054638a/resourceGroups/rg-appinsights"
+  ]
+}
