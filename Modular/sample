@@ -60,3 +60,19 @@ Install-Module -Name Az.Accounts -Force
 Install-Module -Name Az.APIM -Force
 ```
 
+
+
+
+iif(
+    $ActionDateTimeUtc < dateAdd(
+         toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
+         iif(
+              hour(convertTimezone(toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')), 'UTC', 'Eastern Standard Time')) == 19,
+              21,
+              20
+         ),
+         'Hour'
+    ),
+    toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
+    dateAdd(toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')), 1, 'Day')
+)
