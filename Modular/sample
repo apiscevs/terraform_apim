@@ -64,31 +64,27 @@ Install-Module -Name Az.APIM -Force
 
 
 iif(
-    // Compare ActionDateTimeUtc with market rollover time in UTC:
-    $ActionDateTimeUtc < add(
-         // start-of-day in UTC
-         toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
-         // Add either 21 or 20 hours (in ms)
-         toInteger(multiply(
-             iif(
-                 hour(
-                     convertTimezone(
-                         toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
-                         'UTC',
-                         'Eastern Standard Time'
-                     )
-                 ) == 19,
-                 21, // if the converted start-of-day hour equals 19, use 21 hours
-                 20  // otherwise use 20 hours
-             ),
-             3600000  // multiply hours by 3,600,000 (ms per hour)
-         ))
+    // Compare original timestamp to computed market rollover time
+    ActionDateTimeUtc < add(
+        toTimestamp(toString(ActionDateTimeUtc, 'yyyy-MM-dd'), 'yyyy-MM-dd'),
+        hours(
+            iif(
+                hour(
+                    fromUTC(
+                        toTimestamp(toString(ActionDateTimeUtc, 'yyyy-MM-dd'), 'yyyy-MM-dd'),
+                        'America/New_York'
+                    )
+                ) == 19,
+                21,
+                20
+            )
+        )
     ),
-    // If ActionDateTimeUtc is before rollover time, the trading date is start-of-day
-    toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
-    // Otherwise, add one day (86,400,000 ms) to the start-of-day
+    // If before rollover, trading date = start-of-day (midnight)
+    toTimestamp(toString(ActionDateTimeUtc, 'yyyy-MM-dd'), 'yyyy-MM-dd'),
+    // Otherwise, trading date = next day
     add(
-         toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
-         86400000
+        toTimestamp(toString(ActionDateTimeUtc, 'yyyy-MM-dd'), 'yyyy-MM-dd'),
+        days(1)
     )
 )
