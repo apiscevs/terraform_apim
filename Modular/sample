@@ -64,15 +64,25 @@ Install-Module -Name Az.APIM -Force
 
 
 iif(
-    $ActionDateTimeUtc < dateAdd(
+    // If the ActionDateTimeUtc is before the market rollover time
+    $ActionDateTimeUtc < addHours(
+         // Get start of day in UTC
          toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
+         // Determine hours to add based on converted start-of-day hour in Eastern Time
          iif(
-              hour(convertTimezone(toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')), 'UTC', 'Eastern Standard Time')) == 19,
+              hour(
+                  convertTimezone(
+                      toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
+                      'UTC',
+                      'Eastern Standard Time'
+                  )
+              ) == 19,
               21,
               20
-         ),
-         'Hour'
+         )
     ),
+    // Then use the start-of-day timestamp (trading date is the same day)
     toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')),
-    dateAdd(toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')), 1, 'Day')
+    // Otherwise, the trading date is the next day
+    addDays(toTimestamp(formatDateTime($ActionDateTimeUtc, 'yyyy-MM-dd')), 1)
 )
