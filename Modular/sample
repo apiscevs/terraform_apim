@@ -88,3 +88,71 @@ iif(
         days(1)
     )
 )
+
+
+CREATE NONCLUSTERED INDEX IX_ActionItems_TradingDate_JoinKeys
+ON dbo.ActionItems (
+    TradingDate,               -- used in join (and group by)
+    BorrowRequestId,           -- join key
+    LenderAvailabilityId,      -- join key
+    MarketDestination,         -- join key and group by
+    DescriptionType,           -- join key and group by (RecommendationType)
+    BorrowerPartyName,         -- join key and group by
+    LenderPartyName,           -- join key and group by
+    BorrowerPartyPlatformId,   -- join key and group by
+    LenderPartyPlatformId      -- join key and group by
+)
+INCLUDE (Ts);  -- Ts is needed for the MAX(Ts) computation
+GO
+
+
+CREATE OR ALTER FUNCTION dbo.GetTradingRangeWithWeekend
+(
+    @InputDateTime DATETIME
+)
+RETURNS @Range TABLE
+(
+    RangeFilterStart DATETIME,
+    RangeFilterEnd DATETIME
+)
+AS
+BEGIN
+    -- Convert from UTC to Eastern Time (which is DST-aware)
+    DECLARE @LocalDateTime DATETIMEOFFSET = @InputDateTime AT TIME ZONE 'UTC' AT TIME ZONE 'Eastern Standard Time';
+    DECLARE @LocalDate DATE = CAST(@LocalDateTime AS DATE);
+    DECLARE @LocalTime TIME = CAST(@LocalDateTime AS TIME);
+
+    -- Determine base trading date based on the 4:00 PM cutoff
+    DECLARE @TradingDate DATE = 
+         CASE 
+            WHEN @LocalTime >= '16:00:00' THEN @LocalDate
+            ELSE DATEADD(DAY, -1, @LocalDate)
+         END;
+
+    -- Adjust trading date for weekends (if trading date falls on Saturday/Sunday, use the previous Friday)
+    DECLARE @TradingDateAdjusted DATE = 
+         CASE 
+            WHEN DATENAME(WEEKDAY, @TradingDate) = 'Saturday' THEN DATEADD(DAY, -1, @TradingDate)
+            WHEN DATENAME(WEEKDAY, @TradingDate) = 'Sunday' THEN DATEADD(DAY, -2, @TradingDate)
+            ELSE @TradingDate
+         END;
+
+    -- Trading day start is @TradingDateAdjusted at 4:00 PM
+    DECLARE @RangeFilterStart DATETIME = DATEADD(SECOND, 16 * 3600, CAST(@TradingDateAdjusted AS DATETIME));
+
+    -- Determine next trading day:
+    DECLARE @NextTradingDate DATE = 
+         CASE 
+            WHEN DATENAME(WEEKDAY, @TradingDateAdjusted) = 'Friday'
+                THEN DATEADD(DAY, 3, @TradingDateAdjusted) -- Friday -> Monday
+            ELSE DATEADD(DAY, 1, @TradingDateAdjusted)
+         END;
+
+    DECLARE @RangeFilterEnd DATETIME = DATEADD(SECOND, 16 * 3600, CAST(@NextTradingDate AS DATETIME));
+
+    INSERT INTO @Range (RangeFilterStart, RangeFilterEnd)
+    VALUES (@RangeFilterStart, @RangeFilterEnd);
+
+    RETURN;
+END;
+GO
