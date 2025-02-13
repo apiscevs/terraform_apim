@@ -156,3 +156,13 @@ BEGIN
     RETURN;
 END;
 GO
+
+
+iif(
+    dayOfWeek(BaseDate) == 7,
+    add(BaseDate, days(2)),
+    iif(dayOfWeek(BaseDate) == 1,
+        add(BaseDate, days(1)),
+        BaseDate
+    )
+)
