@@ -104,7 +104,7 @@ ON dbo.ActionItems (
 )
 INCLUDE (Ts);  -- Ts is needed for the MAX(Ts) computation
 GO
-
+111
 
 CREATE OR ALTER FUNCTION dbo.GetTradingRangeWithWeekend
 (
