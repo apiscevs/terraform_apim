@@ -166,3 +166,17 @@ iif(
         BaseDate
     )
 )
+
+
+iif(
+    /* Compare the local (Eastern) time portion to the 16:00 cutoff */
+    toTimestamp(toString(fromUTC(ActionDate, 'America/New_York'), 'HH:mm:ss'), 'HH:mm:ss')
+       < toTimestamp('16:00:00', 'HH:mm:ss'),
+    /* If before cutoff, return the local date (truncated) */
+    toTimestamp(toString(fromUTC(ActionDate, 'America/New_York'), 'yyyy-MM-dd'), 'yyyy-MM-dd'),
+    /* Otherwise, return the next local date */
+    add(
+        toTimestamp(toString(fromUTC(ActionDate, 'America/New_York'), 'yyyy-MM-dd'), 'yyyy-MM-dd'),
+        days(1)
+    )
+)
