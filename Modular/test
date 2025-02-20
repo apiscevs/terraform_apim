@@ -1,25 +1,25 @@
-// Pre-request script to get an auth token
 pm.sendRequest({
-    url: 'https://yourapi.com/auth/token',
-    method: 'POST',
-    header: {
-        'Content-Type': 'application/json'
-    },
-    body: {
-        mode: 'raw',
-        raw: JSON.stringify({
-            username: 'yourUsername',
-            password: 'yourPassword'
-        })
-    }
+  url: 'https://localhost:44300/connect/token',
+  method: 'POST',
+  header: {
+    'Content-Type': 'application/x-www-form-urlencoded'
+  },
+  body: {
+    mode: 'urlencoded',
+    urlencoded: [
+      { key: 'grant_type', value: 'password' },
+      { key: 'username', value: 'yourUsername' },
+      { key: 'password', value: 'yourPassword' },
+      { key: 'client_id', value: 'liveserve-access-token' },
+      { key: 'client_secret', value: 'ead8ad5c805c044A' }
+    ]
+  }
 }, function (err, res) {
     if (err) {
         console.error('Error fetching token:', err);
     } else {
-        // Adjust property names based on your actual response
-        var jsonResponse = res.json();
-        var token = jsonResponse.access_token; // or whatever the token property is
-        // Store token in an environment variable
-        pm.environment.set('token', token);
+        const jsonData = res.json();
+        // Store token in environment variable
+        pm.environment.set('token', jsonData.access_token);
     }
 });
