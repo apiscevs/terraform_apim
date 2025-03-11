@@ -1,25 +1,66 @@
-pm.sendRequest({
-  url: 'https://localhost:44300/connect/token',
-  method: 'POST',
-  header: {
-    'Content-Type': 'application/x-www-form-urlencoded'
-  },
-  body: {
-    mode: 'urlencoded',
-    urlencoded: [
-      { key: 'grant_type', value: 'password' },
-      { key: 'username', value: 'yourUsername' },
-      { key: 'password', value: 'yourPassword' },
-      { key: 'client_id', value: 'liveserve-access-token' },
-      { key: 'client_secret', value: 'ead8ad5c805c044A' }
-    ]
-  }
-}, function (err, res) {
-    if (err) {
-        console.error('Error fetching token:', err);
-    } else {
-        const jsonData = res.json();
-        // Store token in environment variable
-        pm.environment.set('token', jsonData.access_token);
+<!-- Load rate limit groups JSON (parse ONCE per request) -->
+    <set-variable name="rateLimitConfig" value='@("{{RateLimitGroups}}")' />
+
+    <!-- Extract method and path ONCE -->
+    <set-variable name="requestMethod" value="@((string)context.Request.Method)" />
+    <set-variable name="requestPath" value="@((string)context.Request.Url.Path.ToLower())" />
+
+    <!-- Parse JSON ONCE -->
+    <set-variable name="jsonConfig" value='@(
+        Newtonsoft.Json.Linq.JObject.Parse(context.Variables["rateLimitConfig"])
+    )' />
+
+    <!-- Find a matching group, otherwise fallback to default -->
+    <set-variable name="selectedGroup" value='@(
+        var path = context.Variables["requestPath"];
+        var method = context.Variables["requestMethod"];
+
+        var group = context.Variables["jsonConfig"]["groups"]
+            .FirstOrDefault(g => g["apis"].Any(api =>
+                ((string)api["method"]).Equals(method, StringComparison.OrdinalIgnoreCase) &&
+                path.StartsWith((string)api["route"], StringComparison.OrdinalIgnoreCase)
+            ));
+
+        group ?? context.Variables["jsonConfig"].SelectToken("default");
+    )' />
+
+    <!-- Extract values from the selected group -->
+    <set-variable name="rateLimitCalls" value="@((string)context.Variables["selectedGroup"]["callAmount"])" />
+    <set-variable name="rateLimitRenewalPeriod" value="@((string)context.Variables["selectedGroup"]["renewalPeriod"])" />
+    <set-variable name="groupName" value="@((string)context.Variables["selectedGroup"]["name"])" />
+
+    <!-- Precompute counter key -->
+    <set-variable name="rateLimitCounterKey" value="@(
+        ((string)context.Variables.GetValueOrDefault<string>("tokenIssuer") ?? "anonymous") 
+        + '-' + ((string)context.Variables["groupName"])
+    )" />
+
+
+
+{
+  "groups": [
+    {
+      "name": "PollingGroup",
+      "callAmount": 100,
+      "renewalPeriod": 20,
+      "apis": [
+        { "method": "GET", "route": "/tradetickets" },
+        { "method": "POST", "route": "/pollingstatus" }
+      ]
+    },
+    {
+      "name": "AdminGroup",
+      "callAmount": 500,
+      "renewalPeriod": 60,
+      "apis": [
+        { "method": "DELETE", "route": "/users" },
+        { "method": "POST", "route": "/admin/actions" }
+      ]
     }
-});
+  ],
+  "default": {
+    "name": "DefaultGroup",
+    "callAmount": 10,
+    "renewalPeriod": 60
+  }
+}
