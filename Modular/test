@@ -1,41 +1,20 @@
-<!-- Load rate limit groups JSON (parse ONCE per request) -->
-    <set-variable name="rateLimitConfig" value='@("{{RateLimitGroups}}")' />
+Overview
 
-    <!-- Extract method and path ONCE -->
-    <set-variable name="requestMethod" value="@((string)context.Request.Method)" />
-    <set-variable name="requestPath" value="@((string)context.Request.Url.Path.ToLower())" />
+This document outlines the approach for implementing a fully configurable, dynamic rate-limiting mechanism in Azure API Management (APIM) using JSON-based Named Values. This method enables flexible rate-limiting rules based on API routes, HTTP methods, and user attributes, allowing real-time updates without modifying APIM policies.
 
-    <!-- Parse JSON ONCE -->
-    <set-variable name="jsonConfig" value='@(
-        Newtonsoft.Json.Linq.JObject.Parse(context.Variables["rateLimitConfig"])
-    )' />
+1. Architecture & Design
 
-    <!-- Find a matching group, otherwise fallback to default -->
-    <set-variable name="selectedGroup" value='@(
-        var path = context.Variables["requestPath"];
-        var method = context.Variables["requestMethod"];
+1.1 Key Components
 
-        var group = context.Variables["jsonConfig"]["groups"]
-            .FirstOrDefault(g => g["apis"].Any(api =>
-                ((string)api["method"]).Equals(method, StringComparison.OrdinalIgnoreCase) &&
-                path.StartsWith((string)api["route"], StringComparison.OrdinalIgnoreCase)
-            ));
+Named Values in APIM: Stores the JSON configuration defining rate limits for different groups of APIs.
 
-        group ?? context.Variables["jsonConfig"].SelectToken("default");
-    )' />
+APIM Policies: Parses the JSON configuration dynamically at runtime.
 
-    <!-- Extract values from the selected group -->
-    <set-variable name="rateLimitCalls" value="@((string)context.Variables["selectedGroup"]["callAmount"])" />
-    <set-variable name="rateLimitRenewalPeriod" value="@((string)context.Variables["selectedGroup"]["renewalPeriod"])" />
-    <set-variable name="groupName" value="@((string)context.Variables["selectedGroup"]["name"])" />
+Rate Limiting Key: Uses tokenIssuer + groupName to enforce separate limits for different users and API groups.
 
-    <!-- Precompute counter key -->
-    <set-variable name="rateLimitCounterKey" value="@(
-        ((string)context.Variables.GetValueOrDefault<string>("tokenIssuer") ?? "anonymous") 
-        + '-' + ((string)context.Variables["groupName"])
-    )" />
+1.2 Configuration Structure
 
-
+A Named Value (e.g., RateLimitGroups) stores the rate-limiting rules in JSON format:
 
 {
   "groups": [
@@ -64,3 +43,72 @@
     "renewalPeriod": 60
   }
 }
+
+This allows the addition of new API routes and groups dynamically without changing APIM policies.
+
+2. APIM Policy Implementation
+
+2.1 Load Configuration
+
+<set-variable name="rateLimitConfigRaw" value='@("{{RateLimitGroups}}")' />
+<set-variable name="rateLimitConfig" value='@(Newtonsoft.Json.Linq.JObject.Parse(context.Variables["rateLimitConfigRaw"]))' />
+
+Retrieves Named Value and parses it into a JObject for efficient querying.
+
+2.2 Extract Request Details
+
+<set-variable name="requestMethod" value="@((string)context.Request.Method)" />
+<set-variable name="requestPath" value="@((string)context.Request.Url.Path.ToLower())" />
+
+Captures HTTP Method and Request Path for lookup in JSON.
+
+2.3 Identify Rate-Limiting Group
+
+<set-variable name="selectedGroup" value='@(
+    var jsonConfig = (Newtonsoft.Json.Linq.JObject)context.Variables["rateLimitConfig"];
+    var path = (string)context.Variables["requestPath"];
+    var method = (string)context.Variables["requestMethod"];
+
+    var groupsArray = (Newtonsoft.Json.Linq.JArray)jsonConfig.SelectToken("groups");
+    var group = groupsArray.FirstOrDefault(g => g["apis"].Any(api =>
+        string.Equals((string)api["method"], method, StringComparison.OrdinalIgnoreCase) &&
+        path.StartsWith((string)api["route"], StringComparison.OrdinalIgnoreCase)
+    ));
+
+    group ?? jsonConfig.SelectToken("default");
+)' />
+
+Finds the first matching group in the JSON configuration.
+
+Falls back to the default group if no match is found.
+
+2.4 Extract Rate-Limiting Values
+
+<set-variable name="rateLimitCalls" value='@(
+    var group = (Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"];
+    (string)group["callAmount"]
+)' />
+
+<set-variable name="rateLimitRenewalPeriod" value='@(
+    var group = (Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"];
+    (string)group["renewalPeriod"]
+)' />
+
+<set-variable name="groupName" value='@(
+    var group = (Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"];
+    (string)group["name"]
+)' />
+
+Extracts the call limit, renewal period, and group name for rate limiting.
+
+2.5 Apply Rate Limiting Policy
+
+<rate-limit-by-key
+    calls="@int.Parse(context.Variables["rateLimitCalls"].ToString())"
+    renewal-period="@int.Parse(context.Variables["rateLimitRenewalPeriod"].ToString())"
+    counter-key="@(
+        ((string)context.Variables.GetValueOrDefault<string>("tokenIssuer") ?? "anonymous")
+        + '-' + ((string)context.Variables["groupName"])
+    )" />
+
+Applies the extracted rate limits dynamically per tokenIssuer + groupName.
