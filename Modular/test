@@ -1,5 +1,25 @@
-At this point, the exact rate limit requirements are unknown. We anticipate that some APIs will need to be called more frequently (such as polling), while others will be used far less often. This implementation is flexible, allowing us to define rate limit requirements with fine granularity.
+<style>
+  /* Optional: add a smooth transition for the height change */
+  details {
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+  }
+  /* When collapsed, limit the max-height to just the summary */
+  details:not([open]) {
+    max-height: 40px; /* adjust to the approximate height of your summary */
+  }
+  /* When expanded, allow it to grow */
+  details[open] {
+    max-height: 1000px; /* a large value so it can expand fully */
+  }
+</style>
 
-For example, in the setup below, we have defined two groups (excluding the default one). One is intended for frequent polling, while the other is designed for operations we assume to be more expensive.
-
-For the polling route, we allow up to 240 requests per minute per client. However, for creating a borrow request, only one request is permitted every 30 seconds. All other requests will follow the Default group’s rate limit. This means that even if a client reaches the request limit for one group, they will still be able to access other endpoints without issue—until they hit the rate limit cap for the next group.
+<details>
+  <summary style="cursor: pointer; font-size: 1.2em; font-weight: bold;">
+    Click to Expand
+  </summary>
+  <div>
+    <p>This is the detailed content. When you click the summary, this section will expand and push the sections below it downward.</p>
+    <p>You can add as much content as you need here.</p>
+  </div>
+</details>
