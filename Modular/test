@@ -1,25 +1,103 @@
 <style>
-  /* Optional: add a smooth transition for the height change */
-  details {
-    overflow: hidden;
-    transition: max-height 0.3s ease;
+  /* Optional styling for a cleaner look */
+  .token-instructions {
+    font-family: Arial, sans-serif;
+    line-height: 1.5;
+    color: #333;
+    margin: 1em 0;
   }
-  /* When collapsed, limit the max-height to just the summary */
-  details:not([open]) {
-    max-height: 40px; /* adjust to the approximate height of your summary */
+  .token-instructions h2 {
+    margin-top: 0;
+    color: #006699;
   }
-  /* When expanded, allow it to grow */
-  details[open] {
-    max-height: 1000px; /* a large value so it can expand fully */
+  .token-instructions pre {
+    background: #f6f8fa;
+    border: 1px solid #ddd;
+    padding: 1em;
+    overflow: auto;
+  }
+  .token-instructions code {
+    font-family: Consolas, monospace;
+    white-space: pre;
   }
 </style>
 
-<details>
-  <summary style="cursor: pointer; font-size: 1.2em; font-weight: bold;">
-    Click to Expand
-  </summary>
-  <div>
-    <p>This is the detailed content. When you click the summary, this section will expand and push the sections below it downward.</p>
-    <p>You can add as much content as you need here.</p>
-  </div>
-</details>
+<div class="token-instructions">
+  <h2>Retrieving Your ID Token</h2>
+  <p>
+    Use the following examples to fetch an ID token from our authentication endpoint.
+    Replace any placeholders (<code>YOUR_USERNAME</code>, <code>YOUR_PASSWORD</code>,
+    <code>CLIENT_ID</code>, etc.) with real values.
+  </p>
+
+  <h3>1. JavaScript (Fetch API)</h3>
+  <pre><code>
+// Example POST request using Fetch
+fetch("https://login.example.com/oauth/token", {
+  method: "POST",
+  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  body: new URLSearchParams({
+    grant_type: "password",
+    username: "YOUR_USERNAME",
+    password: "YOUR_PASSWORD",
+    client_id: "CLIENT_ID",
+    client_secret: "CLIENT_SECRET"
+  })
+})
+  .then(response => response.json())
+  .then(data => {
+    console.log("ID Token:", data.id_token);
+  })
+  .catch(error => {
+    console.error("Error fetching token:", error);
+  });
+  </code></pre>
+
+  <h3>2. C# (HttpClient)</h3>
+  <pre><code c#>
+using System;
+using System.Net.Http;
+using System.Threading.Tasks;
+
+public class AuthClient
+{
+    public static async Task GetIdTokenAsync()
+    {
+        using var client = new HttpClient();
+        var content = new FormUrlEncodedContent(new []
+        {
+            new KeyValuePair<string, string>("grant_type", "password"),
+            new KeyValuePair<string, string>("username", "YOUR_USERNAME"),
+            new KeyValuePair<string, string>("password", "YOUR_PASSWORD"),
+            new KeyValuePair<string, string>("client_id", "CLIENT_ID"),
+            new KeyValuePair<string, string>("client_secret", "CLIENT_SECRET")
+        });
+
+        var response = await client.PostAsync("https://login.example.com/oauth/token", content);
+        var json = await response.Content.ReadAsStringAsync();
+        Console.WriteLine("ID Token: " + json);
+    }
+}
+  </code></pre>
+
+  <h3>3. cURL</h3>
+  <pre><code>
+curl -X POST "https://login.example.com/oauth/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=password" \
+  -d "username=YOUR_USERNAME" \
+  -d "password=YOUR_PASSWORD" \
+  -d "client_id=CLIENT_ID" \
+  -d "client_secret=CLIENT_SECRET"
+  </code></pre>
+
+  <p>
+    Once you have your <code>id_token</code>, include it in the
+    <strong>Authorization</strong> header when making requests to our APIs:
+  </p>
+
+  <pre><code>
+GET https://api.example.com/protected-resource
+Authorization: Bearer &lt;YOUR_ID_TOKEN&gt;
+  </code></pre>
+</div>
