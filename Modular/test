@@ -1,77 +1,45 @@
-<div style="height: 600px; overflow: auto;">
-  <h2>Using Your ID Token</h2>
-  <p>
-    After obtaining an ID token from our authentication endpoint, include it as a Bearer token in your 
-    <strong>Authorization</strong> header. For example:
-  </p>
-  <pre><code class="language-http">
-GET https://api.example.com/protected-resource
-Authorization: Bearer &lt;YOUR_ID_TOKEN&gt;
-  </code></pre>
-
-  <p>
-    Below are examples showing how to retrieve your ID token using cURL, JavaScript (Fetch API), and C#.
-    Replace any placeholders (<code>YOUR_USERNAME</code>, <code>YOUR_PASSWORD</code>, etc.) with real values.
-  </p>
-
-  <h3>1. cURL</h3>
-  <pre><code class="language-bash">
-curl -X POST "https://login.example.com/oauth/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=password" \
-  -d "username=YOUR_USERNAME" \
-  -d "password=YOUR_PASSWORD" \
-  -d "client_id=CLIENT_ID" \
-  -d "client_secret=CLIENT_SECRET"
-  </code></pre>
-
-  <h3>2. JavaScript (Fetch API)</h3>
-  <pre><code class="language-javascript">
-// Example POST request using Fetch
-fetch("https://login.example.com/oauth/token", {
-  method: "POST",
-  headers: { "Content-Type": "application/x-www-form-urlencoded" },
-  body: new URLSearchParams({
-    grant_type: "password",
-    username: "YOUR_USERNAME",
-    password: "YOUR_PASSWORD",
-    client_id: "CLIENT_ID",
-    client_secret: "CLIENT_SECRET"
-  })
-})
-  .then(response => response.json())
-  .then(data => {
-    console.log("ID Token:", data.id_token);
-  })
-  .catch(error => {
-    console.error("Error fetching token:", error);
-  });
-  </code></pre>
-
-  <h3>3. C# (HttpClient)</h3>
-  <pre><code class="language-csharp">
 using System;
 using System.Net.Http;
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Text.Json;
 
-public class AuthClient
-{
-    public static async Task GetIdTokenAsync()
-    {
+class Program {
+    static async Task Main() {
+        var url = "https://login.fisgti.com/igj/tutorial/rest/RIApresentation";
+        var data = new Dictionary<string, string> {
+            { "grant_type", "password" },
+            { "username", "LIVESERVER.SERVICEACCOUNT" },
+            { "password", "test" },
+            { "client_id", "loan-local-liveserver-access-token" },
+            { "client_secret", "bob" }
+        };
         using var client = new HttpClient();
-        var content = new FormUrlEncodedContent(new []
-        {
-            new KeyValuePair<string, string>("grant_type", "password"),
-            new KeyValuePair<string, string>("username", "YOUR_USERNAME"),
-            new KeyValuePair<string, string>("password", "YOUR_PASSWORD"),
-            new KeyValuePair<string, string>("client_id", "CLIENT_ID"),
-            new KeyValuePair<string, string>("client_secret", "CLIENT_SECRET")
-        });
-
-        var response = await client.PostAsync("https://login.example.com/oauth/token", content);
+        var content = new FormUrlEncodedContent(data);
+        var response = await client.PostAsync(url, content);
         var json = await response.Content.ReadAsStringAsync();
-        Console.WriteLine("ID Token: " + json);
+        var token = JsonDocument.Parse(json).RootElement.GetProperty("token").GetString();
+        Console.WriteLine(token);
     }
 }
-  </code></pre>
-</div>
+
+
+(async () => {
+  const url = "https://login.fisgti.com/igj/tutorial/rest/RIApresentation";
+  const params = new URLSearchParams({
+    grant_type: "password",
+    username: "LIVESERVER.SERVICEACCOUNT",
+    password: "test",
+    client_id: "loan-local-liveserver-access-token",
+    client_secret: "bob"
+  });
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params
+  });
+
+  const data = await res.json();
+  console.log(data.token);
+})();
