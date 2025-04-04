@@ -1,45 +1,49 @@
-using System;
-using System.Net.Http;
-using System.Threading.Tasks;
-using System.Collections.Generic;
-using System.Text.Json;
+sequenceDiagram
+    title Full Message Flow with Hash-Based Routing and Multiple Consumers
 
-class Program {
-    static async Task Main() {
-        var url = "https://login.fisgti.com/igj/tutorial/rest/RIApresentation";
-        var data = new Dictionary<string, string> {
-            { "grant_type", "password" },
-            { "username", "LIVESERVER.SERVICEACCOUNT" },
-            { "password", "test" },
-            { "client_id", "loan-local-liveserver-access-token" },
-            { "client_secret", "bob" }
-        };
-        using var client = new HttpClient();
-        var content = new FormUrlEncodedContent(data);
-        var response = await client.PostAsync(url, content);
-        var json = await response.Content.ReadAsStringAsync();
-        var token = JsonDocument.Parse(json).RootElement.GetProperty("token").GetString();
-        Console.WriteLine(token);
-    }
-}
+    participant App as 📤 Producer (App/Service)
+    participant Hasher as 🔁 Hash Function
+    participant SB as 📬 Azure Service Bus (1000 Bucketed Sessions)
+    participant PodA as 🧠 Consumer Pod A
+    participant PodB as 🧠 Consumer Pod B
+    participant Redis as 💾 Redis Cache
+    participant MemA as 🧠 In-Memory Cache (Pod A)
+    participant MemB as 🧠 In-Memory Cache (Pod B)
+
+    App->>Hasher: Hash(securityId) → bucket-N
+    Hasher-->>App: sessionId = "bucket-0423"
+    App->>SB: Send(message, sessionId)
+
+    Note over SB: Messages grouped under sessionId buckets
+
+    SB->>PodA: Assign session "bucket-0423"
+    PodA->>MemA: Check if security state is loaded
+    alt Not in memory
+        PodA->>Redis: GET transactions:{securityId}
+        Redis-->>PodA: Return list or null
+        PodA->>MemA: Store state locally
+    else Already in memory
+        Note right of PodA: Use existing in-memory state
+    end
+    PodA->>MemA: Process message & update state
+    alt State updated
+        PodA->>Redis: Conditional SET (Lua + version check)
+    end
+
+    SB->>PodB: Assign session "bucket-0079"
+    PodB->>MemB: Check if security state is loaded
+    alt Not in memory
+        PodB->>Redis: GET transactions:{securityId}
+        Redis-->>PodB: Return list or null
+        PodB->>MemB: Store state locally
+    else Already in memory
+        Note right of PodB: Use existing in-memory state
+    end
+    PodB->>MemB: Process message & update state
+    alt State updated
+        PodB->>Redis: Conditional SET (Lua + version check)
+    end
+
+    Note over PodA,PodB: All consumers share same routing logic, work in parallel
 
 
-(async () => {
-  const url = "https://login.fisgti.com/igj/tutorial/rest/RIApresentation";
-  const params = new URLSearchParams({
-    grant_type: "password",
-    username: "LIVESERVER.SERVICEACCOUNT",
-    password: "test",
-    client_id: "loan-local-liveserver-access-token",
-    client_secret: "bob"
-  });
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params
-  });
-
-  const data = await res.json();
-  console.log(data.token);
-})();
