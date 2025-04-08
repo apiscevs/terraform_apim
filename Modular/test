@@ -1,15 +1,9 @@
-I went through the existing code and got a better sense of how ME is working. I also reviewed your branch—it looks like a POC with some issues scattered around. While I can trace what was changed, it's hard to tell what’s missing or unfinished, which makes it difficult to confidently build on top of it.
-
-Given that, I believe it would be more efficient to start a clean POC from scratch. That way, I can fully understand the flow and ensure everything is functioning correctly.
-
-At this point, I’d prefer not to provide even a rough estimate. Since we’ll likely uncover more edge cases and problem areas during a fresh POC, estimating now would be premature.
-
-Here's the plan I suggest:
-
-Build a new POC from scratch to understand the scope and fix any foundational issues.
-
-Re-assess and provide realistic estimates based on what we uncover during the POC.
-
-Meanwhile, someone else can start working on manual integration tests to verify the current behavior and later validate the refactored version.
-
-Let me know if that works for you.
+return await _potentialMatchRecommendationRepository.GetItemAsync(
+    x => x.Id == recommendationId
+        && (
+            (party.PlatformActivity == PlatformActivity.Borrower && x.Borrower.PartyPlatformId == party.PlatformId)
+            || (party.PlatformActivity == PlatformActivity.Lender && x.Lender.PartyPlatformId == party.PlatformId)
+            || (party.PlatformActivity == PlatformActivity.Conduit && 
+                (x.Borrower.PartyPlatformId == party.PlatformId || x.Lender.PartyPlatformId == party.PlatformId))
+        ),
+    true);
