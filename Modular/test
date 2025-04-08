@@ -1,3 +1,15 @@
-To support the business requirement of 24/5 uptime with scalable processing, the initial approach considered removing the routing table and assigning a dedicated session per security. However, this would result in tens of thousands of sessions, introducing significant overhead for Azure Service Bus and making consumer scaling impractical — potentially requiring hundreds of parallel instances.
+I went through the existing code and got a better sense of how ME is working. I also reviewed your branch—it looks like a POC with some issues scattered around. While I can trace what was changed, it's hard to tell what’s missing or unfinished, which makes it difficult to confidently build on top of it.
 
-The diagram below outlines a more scalable solution: routing messages into a fixed number of session "buckets" using a hash function. This maintains ordering per security, limits the total session count, and enables parallel processing with a manageable number of consumers.
+Given that, I believe it would be more efficient to start a clean POC from scratch. That way, I can fully understand the flow and ensure everything is functioning correctly.
+
+At this point, I’d prefer not to provide even a rough estimate. Since we’ll likely uncover more edge cases and problem areas during a fresh POC, estimating now would be premature.
+
+Here's the plan I suggest:
+
+Build a new POC from scratch to understand the scope and fix any foundational issues.
+
+Re-assess and provide realistic estimates based on what we uncover during the POC.
+
+Meanwhile, someone else can start working on manual integration tests to verify the current behavior and later validate the refactored version.
+
+Let me know if that works for you.
