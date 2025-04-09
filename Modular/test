@@ -1,9 +1,22 @@
-return await _potentialMatchRecommendationRepository.GetItemAsync(
-    x => x.Id == recommendationId
-        && (
-            (party.PlatformActivity == PlatformActivity.Borrower && x.Borrower.PartyPlatformId == party.PlatformId)
-            || (party.PlatformActivity == PlatformActivity.Lender && x.Lender.PartyPlatformId == party.PlatformId)
-            || (party.PlatformActivity == PlatformActivity.Conduit && 
-                (x.Borrower.PartyPlatformId == party.PlatformId || x.Lender.PartyPlatformId == party.PlatformId))
-        ),
-    true);
+### 🚀 Get Started
+
+To begin using this collection, just follow one simple step:
+
+---
+
+### ✅ Set your variables
+
+Click the [**Variables**](#variables) tab of the collection and provide the required values below:
+
+| Variable        | Description               |
+|-----------------|---------------------------|
+| `base_url`      | Base URL of the API       |
+| `client_id`     | OAuth client ID           |
+| `client_secret` | OAuth client secret       |
+| `username`      | API username              |
+| `password`      | API password              |
+| `idp`           | Identity provider name    |
+
+---
+
+Once these are set, you're all set — **authorization will be handled automatically**, and you can start testing the API right away.
