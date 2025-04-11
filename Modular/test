@@ -1,22 +1,25 @@
-### 🚀 Get Started
+RuleFor(x => x.Security)
+    .CustomAsync(async (security, context, _) =>
+    {
+        if (security is null)
+        {
+            context.AddFailure(new ValidationFailure(
+                propertyName: "Security.DynamicKey_" + DateTime.Now.Ticks,
+                error: "Security object is required."
+            ));
+            return;
+        }
 
-To begin using this collection, just follow one simple step:
+        // Example logic to fetch something and use it in field name
+        var propertyName = security.IdentifierType switch
+        {
+            "CUSIP" => "Security.CUSIP",
+            "ISIN"  => "Security.ISIN",
+            _       => "Security.UnknownId"
+        };
 
----
-
-### ✅ Set your variables
-
-Click the [**Variables**](#variables) tab of the collection and provide the required values below:
-
-| Variable        | Description               |
-|-----------------|---------------------------|
-| `base_url`      | Base URL of the API       |
-| `client_id`     | OAuth client ID           |
-| `client_secret` | OAuth client secret       |
-| `username`      | API username              |
-| `password`      | API password              |
-| `idp`           | Identity provider name    |
-
----
-
-Once these are set, you're all set — **authorization will be handled automatically**, and you can start testing the API right away.
+        context.AddFailure(new ValidationFailure(
+            propertyName,
+            "Security ID is invalid for the given type."
+        ));
+    });
