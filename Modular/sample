@@ -1,1 +1,1 @@
-${__groovy(new File(FileServer.getFileServer().getBaseDir() + "/data/users.csv").readLines().size() - 1)}
+${__groovy(new File(org.apache.jmeter.services.FileServer.getFileServer().getBaseDir() + "/dev3_users.csv").readLines().size() - 1)}
