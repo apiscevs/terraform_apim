@@ -1,11 +1,11 @@
-def now = System.currentTimeMillis()
-def lastLogin = vars.get("lastLoginTime")?.toLong() ?: 0
-def refreshIntervalMs = 15 * 60 * 1000  // 15 minutes
+def keysToRemove = []
+props.keySet().each { key ->
+    if (key.toString().endsWith("_id_token")) {
+        keysToRemove.add(key)
+    }
+}
 
-if ((now - lastLogin) >= refreshIntervalMs) {
-    vars.put("needsLogin", "true")
-    vars.put("lastLoginTime", now.toString())
-    log.info("Thread ${ctx.getThreadNum()} → token refresh triggered")
-} else {
-    vars.put("needsLogin", "false")
+keysToRemove.each { key ->
+    props.remove(key)
+    log.info("removed " + key)
 }
