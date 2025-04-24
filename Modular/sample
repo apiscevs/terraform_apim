@@ -1,11 +1,1 @@
-def keysToRemove = []
-props.keySet().each { key ->
-    if (key.toString().endsWith("_id_token")) {
-        keysToRemove.add(key)
-    }
-}
-
-keysToRemove.each { key ->
-    props.remove(key)
-    log.info("removed " + key)
-}
+${__groovy(new File(FileServer.getFileServer().getBaseDir() + "/data/users.csv").readLines().size() - 1)}
