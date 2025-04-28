@@ -1,1 +1,13 @@
-${__groovy(new File(org.apache.jmeter.services.FileServer.getFileServer().getBaseDir() + "/dev3_users.csv").readLines().size() - 1)}
+<As a> Developer preparing JMeter tests for MQ workflows
+<I would like to> have basic scaffolding in place to authenticate and connect to MQ reliably
+<So that> I can focus on building and running business-specific test scenarios without being blocked by technical connection issues
+
+
+Acceptance Criteria:
+A JMeter Test Plan exists that successfully authenticates and connects to the MQ environment.
+
+Connection and authentication logic are implemented in a modular way to allow reuse in business-specific scenarios.
+
+Any technical obstacles (such as missing credentials, network access problems, or unexpected MQ errors) are identified and documented.
+
+No errors are encountered when executing a simple MQ connection validation test.
