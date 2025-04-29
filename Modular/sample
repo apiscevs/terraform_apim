@@ -1,13 +1,19 @@
-<As a> Developer preparing JMeter tests for MQ workflows
-<I would like to> have basic scaffolding in place to authenticate and connect to MQ reliably
-<So that> I can focus on building and running business-specific test scenarios without being blocked by technical connection issues
+// Retrieve base directory of the main JMX file
+def baseDir = org.apache.jmeter.services.FileServer.getFileServer().getBaseDir()
+log.info("Base directory: " + baseDir)
 
+// Get file path from property or variable
+def relPath = props.get("users_file") ?: vars.get("pathToUsers")
+log.info("Relative file path: " + relPath)
 
-Acceptance Criteria:
-A JMeter Test Plan exists that successfully authenticates and connects to the MQ environment.
+// Construct full file path
+def file = new File(baseDir, relPath)
+log.info("Full file path: " + file.getAbsolutePath())
 
-Connection and authentication logic are implemented in a modular way to allow reuse in business-specific scenarios.
-
-Any technical obstacles (such as missing credentials, network access problems, or unexpected MQ errors) are identified and documented.
-
-No errors are encountered when executing a simple MQ connection validation test.
+// Read and log file size (line count)
+if (file.exists()) {
+    def lineCount = file.readLines().size()
+    log.info("File exists. Line count: $lineCount")
+} else {
+    log.error("File does not exist at: " + file.getAbsolutePath())
+}
