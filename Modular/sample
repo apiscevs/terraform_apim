@@ -1,20 +1,23 @@
-import org.apache.jmeter.threads.JMeterContextService
 import org.apache.jmeter.engine.StandardJMeterEngine
 
-def groupNameToWatch = "Main TG"
+// 1) grab the JMeter engine
+StandardJMeterEngine engine = ctx.getEngine()
 
-for (tg in JMeterContextService.getThreadGroups()) {
-    if (tg.name == groupNameToWatch) {
-        def active = tg.numberOfThreads
-        log.info("Monitor TG: Found '$groupNameToWatch' with $active active threads.")
-        if (active > 0) {
-            return  // exit early, don't stop test yet
-        } else {
-            log.info("Monitor TG: No active threads in '$groupNameToWatch'. Stopping test.")
-            StandardJMeterEngine.stopTest(true)
-            return
-        }
-    }
+// 2) find the ThreadGroup instance whose name matches your Main TG
+def mainTG = engine.getThreadGroups()
+                   .find { it.getName() == 'Main TG' }
+
+if (mainTG == null) {
+    log.warn("▶ Monitor: could not find a Thread Group named 'Main TG'")
+    return
 }
 
-log.warn("Monitor TG: Thread group '$groupNameToWatch' not found.")
+// 3) ask the underlying java.lang.ThreadGroup how many live threads it has
+int active = mainTG.threadGroup.activeCount()
+log.info("▶ Monitor: 'Main TG' active threads = ${active}")
+
+// 4) if there are none, stop the entire test
+if (active == 0) {
+    log.info("▶ Monitor: no more Main TG threads – stopping test")
+    engine.stopTest(true)
+}
