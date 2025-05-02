@@ -1,16 +1,5 @@
-import org.apache.jmeter.threads.JMeterContextService
-
-// 1) how many threads are still alive in this Thread Group?
-int alive = JMeterContextService
-              .getThreadCounts()
-              .activeThreadsForGroup(ctx.getThreadGroup().getName())
-
-log.info("▶ Main TG: threads still alive = " + alive)
-
-// 2) only the first thread to see alive<=1 stops the test
-if (alive <= 1) {
-  if (props.putIfAbsent('MAIN_TG_STOPPED','true') == null) {
-    log.info("▶ Main TG: last thread detected – stopping test")
-    ctx.getEngine().stopTest(true)
-  }
-}
+${__groovy(
+  org.apache.jmeter.threads.JMeterContextService
+    .getThreadCounts()
+    .activeThreadsForGroup('Main TG') == 0
+)}
