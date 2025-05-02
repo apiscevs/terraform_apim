@@ -1,14 +1,12 @@
 import org.apache.jmeter.threads.JMeterContextService
 
-// 1) How many threads are still alive in "Main TG"?
-int alive = JMeterContextService
-               .getThreadCounts()
-               .activeThreadsForGroup('Main TG')
+// 1) Get total active threads in the entire test
+int active = JMeterContextService.getNumberOfThreads()
 
-log.info("▶ Monitor: 'Main TG' active threads = " + alive)
+log.info("▶ Monitor: active threads = " + active)
 
-// 2) As soon as it drops to zero, stop the whole test
-if (alive == 0) {
-    log.info("▶ Monitor: no more Main TG threads – stopping test")
+// 2) When only this Monitor thread remains (active ≤ 1), stop the whole test
+if (active <= 1) {
+    log.info("▶ Monitor: no more worker threads – stopping test")
     ctx.getEngine().stopTest(true)
 }
