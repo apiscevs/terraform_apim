@@ -1,29 +1,46 @@
-import java.lang.reflect.Field
 import org.apache.jmeter.engine.StandardJMeterEngine
+import java.lang.reflect.Field
 
+// 1) Grab the engine
 StandardJMeterEngine engine = ctx.getEngine()
 
-// reflection to get the private 'groups' list
-Field f = StandardJMeterEngine.class.getDeclaredField('groups')
-f.setAccessible(true)
-List<?> groups = (List<?>)f.get(engine)
+// 2) Pull out its private 'groups' List<AbstractThreadGroup>
+Field fg = StandardJMeterEngine.class.getDeclaredField('groups')
+fg.setAccessible(true)
+List<?> groups = (List<?>)fg.get(engine)
 
-// find your Main TG by its exact name
+// 3) Find the one named exactly "Main TG"
 def mainTG = groups.find { it.getName() == 'Main TG' }
-if (!mainTG) {
-  log.warn("Monitor: no Thread Group named 'Main TG'")
-  return
+if (mainTG == null) {
+    log.warn("▶ Monitor: no Thread Group called 'Main TG'")
+    return
 }
 
-// reflection to grab the low-level ThreadGroup and its activeCount()
-Field tgF = mainTG.getClass().getSuperclass().getDeclaredField('threadGroup')
-tgF.setAccessible(true)
-java.lang.ThreadGroup jtg = (java.lang.ThreadGroup)tgF.get(mainTG)
+// 4) Walk up the class hierarchy until we find a 'threadGroup' field
+Field tgField = null
+Class<?> scan = mainTG.getClass()
+while (scan != null) {
+    try {
+        tgField = scan.getDeclaredField('threadGroup')
+        break
+    } catch (NoSuchFieldException e) {
+        scan = scan.getSuperclass()
+    }
+}
 
+if (tgField == null) {
+    log.error("▶ Monitor: couldn’t find a private 'threadGroup' field on Main TG")
+    return
+}
+tgField.setAccessible(true)
+
+// 5) Extract the java.lang.ThreadGroup and ask how many threads are alive
+java.lang.ThreadGroup jtg = (java.lang.ThreadGroup)tgField.get(mainTG)
 int alive = jtg.activeCount()
-log.info("Monitor: 'Main TG' active threads = " + alive)
+log.info("▶ Monitor: 'Main TG' active threads = $alive")
 
+// 6) If it’s zero, stop the entire test
 if (alive == 0) {
-  log.info("Monitor: Main TG is done — stopping test")
-  engine.stopTest(true)
+    log.info("▶ Monitor: no more Main TG threads – stopping test")
+    engine.stopTest(true)
 }
