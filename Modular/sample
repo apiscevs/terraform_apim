@@ -1,55 +1,20 @@
-======================================
- JMeter CLI Parameter Cheat Sheet
-======================================
+import org.apache.jmeter.threads.JMeterContextService
+import org.apache.jmeter.engine.StandardJMeterEngine
 
-Basic Test Execution:
----------------------
--n
-    Run in non-GUI (command-line) mode. Required for automated runs.
+def groupNameToWatch = "Main TG"
 
--t <file.jmx>
-    Path to the JMeter test plan file (.jmx).
+for (tg in JMeterContextService.getThreadGroups()) {
+    if (tg.name == groupNameToWatch) {
+        def active = tg.numberOfThreads
+        log.info("Monitor TG: Found '$groupNameToWatch' with $active active threads.")
+        if (active > 0) {
+            return  // exit early, don't stop test yet
+        } else {
+            log.info("Monitor TG: No active threads in '$groupNameToWatch'. Stopping test.")
+            StandardJMeterEngine.stopTest(true)
+            return
+        }
+    }
+}
 
--l <file.jtl>
-    Path to save raw test results (JTL file). Used for generating reports later.
-
--j <file.log>
-    Path to save the test log output (INFO, WARN, log.info() from Groovy etc.).
-
-
-HTML Report Generation:
-------------------------
--e
-    Enables HTML report generation. Must be used with -o.
-
--o <folder>
-    Output directory for the HTML report. 
-    NOTE: Must not already exist, or JMeter will skip report generation.
-
-
-User & System Properties:
---------------------------
--Jkey=value
-    Sets a JMeter user-defined property.
-    Accessible inside the test via ${__P(key)} or props.get("key").
-
--Dproperty=value
-    Sets a Java system property.
-    Can affect JMeter internals like working directory (-Duser.dir=...).
-
-
-Example:
---------
-jmeter -n -t API_Scaff.jmx ^
-  -l results/results.jtl ^
-  -j results/jmeter.log ^
-  -e -o results/html ^
-  -Jusers_file=../../../Shared/dev3_users.csv ^
-  -Jthreads=5 -Jduration=60
-
-
-Notes:
-------
-- Ctrl+C aborts the test, but skips HTML report generation.
-- Always delete the report output folder before rerunning (-o must point to a clean directory).
-- Use log tailing (e.g. `Get-Content -Wait` in PowerShell) to watch logs live.
+log.warn("Monitor TG: Thread group '$groupNameToWatch' not found.")
