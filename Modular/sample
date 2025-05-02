@@ -1,23 +1,27 @@
+import java.lang.reflect.Field
 import org.apache.jmeter.engine.StandardJMeterEngine
 
-// 1) grab the JMeter engine
+// 1) Grab the engine
 StandardJMeterEngine engine = ctx.getEngine()
 
-// 2) find the ThreadGroup instance whose name matches your Main TG
-def mainTG = engine.getThreadGroups()
-                   .find { it.getName() == 'Main TG' }
+// 2) Reflectively access the private 'groups' field
+Field groupsField = StandardJMeterEngine.class.getDeclaredField('groups')
+groupsField.setAccessible(true)
+List<?> groups = (List<?>)groupsField.get(engine)
 
-if (mainTG == null) {
-    log.warn("▶ Monitor: could not find a Thread Group named 'Main TG'")
-    return
+// 3) Find the ThreadGroup named exactly "Main TG"
+int mainActive = 0
+groups.find { tg ->
+    tg.getName() == 'Main TG'
+}?.with { tg ->
+    // Each tg has a 'threadGroup' property of type java.lang.ThreadGroup
+    mainActive = tg.threadGroup.activeCount()
 }
 
-// 3) ask the underlying java.lang.ThreadGroup how many live threads it has
-int active = mainTG.threadGroup.activeCount()
-log.info("▶ Monitor: 'Main TG' active threads = ${active}")
+log.info("▶ Monitor: 'Main TG' active threads = $mainActive")
 
-// 4) if there are none, stop the entire test
-if (active == 0) {
+// 4) If it’s zero, stop the entire test gracefully
+if (mainActive == 0) {
     log.info("▶ Monitor: no more Main TG threads – stopping test")
     engine.stopTest(true)
 }
