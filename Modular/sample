@@ -1,32 +1,31 @@
 import java.lang.reflect.Field
 import org.apache.jmeter.engine.StandardJMeterEngine
-import org.apache.jmeter.threads.AbstractThreadGroup
 
-// 1) Grab the engine
 StandardJMeterEngine engine = ctx.getEngine()
 
-// 2) Reflectively pull out the private List<AbstractThreadGroup> 'groups'
+// 1) Pull out the private 'groups' list from the engine
 Field groupsField = StandardJMeterEngine.class.getDeclaredField('groups')
 groupsField.setAccessible(true)
 List<?> groups = (List<?>) groupsField.get(engine)
 
-// 3) Find the TG named “Main TG”
+// 2) Find your Main TG by name
 def mainTG = groups.find { it.getName() == 'Main TG' }
 if (mainTG == null) {
     log.warn("▶ Monitor: no Thread Group named 'Main TG' found")
     return
 }
 
-// 4) Use reflection again to grab its java.lang.ThreadGroup field
-Field tgField = AbstractThreadGroup.class.getDeclaredField('threadGroup')
+// 3) Reflectively grab the private java.lang.ThreadGroup from its superclass
+Class<?> superCls = mainTG.getClass().getSuperclass()       // AbstractThreadGroup
+Field tgField   = superCls.getDeclaredField('threadGroup')  
 tgField.setAccessible(true)
 java.lang.ThreadGroup jtg = (java.lang.ThreadGroup) tgField.get(mainTG)
 
-// 5) Now you can ask how many threads remain
+// 4) Check how many live threads remain
 int active = jtg.activeCount()
-log.info("▶ Monitor: 'Main TG' active threads = $active")
+log.info("▶ Monitor: 'Main TG' active threads = " + active)
 
-// 6) If zero, stop the test
+// 5) Stop the test when it hits zero
 if (active == 0) {
     log.info("▶ Monitor: no more Main TG threads – stopping test")
     engine.stopTest(true)
