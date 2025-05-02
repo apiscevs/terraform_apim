@@ -1,5 +1,14 @@
-${__groovy(
-  org.apache.jmeter.threads.JMeterContextService
-    .getThreadCounts()
-    .activeThreadsForGroup('Main TG') == 0
-)}
+import org.apache.jmeter.threads.JMeterContextService
+
+// 1) How many threads are still alive in "Main TG"?
+int alive = JMeterContextService
+               .getThreadCounts()
+               .activeThreadsForGroup('Main TG')
+
+log.info("▶ Monitor: 'Main TG' active threads = " + alive)
+
+// 2) As soon as it drops to zero, stop the whole test
+if (alive == 0) {
+    log.info("▶ Monitor: no more Main TG threads – stopping test")
+    ctx.getEngine().stopTest(true)
+}
