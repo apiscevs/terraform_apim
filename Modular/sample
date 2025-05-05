@@ -1,12 +1,3 @@
-import org.apache.jmeter.threads.JMeterContextService
+This test suite builds upon the original JMeter scenarios developed in 2023. In 2025, we began extending it to cover additional endpoints and business flows, with a dual purpose: to support performance validation during development and to track system performance trends over time. The evolving suite helps us detect regressions, benchmark improvements, and ensure continued scalability.
 
-// 1) Get total active threads in the entire test
-int active = JMeterContextService.getNumberOfThreads()
 
-log.info("▶ Monitor: active threads = " + active)
-
-// 2) When only this Monitor thread remains (active ≤ 1), stop the whole test
-if (active <= 1) {
-    log.info("▶ Monitor: no more worker threads – stopping test")
-    ctx.getEngine().stopTest(true)
-}
