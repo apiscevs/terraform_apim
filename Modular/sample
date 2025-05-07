@@ -1,59 +1,7 @@
-In our performance and stability testing, we distinguish two main types of test plans for creating Borrow Requests (BRs). Each serves a different purpose and comes with its own setup and expectations.
-
-🔀 1. Randomized Ingestion Tests
-These tests focus on system observability under variable load.
-
-How it works: The test plan defines the number of BRs to create, but selects random securities and related data per submission.
-
-Purpose: Great for testing overall system health, throughput, and responsiveness under different load levels.
-
-Benefits:
-
-Easy to scale (just change the "order count" parameter).
-
-No need to manage multiple input files.
-
-Useful for chaos-style load simulation.
-
-Limitations:
-
-Not deterministic (duplicates, missing edge cases).
-
-Not suitable for comparing performance over time.
-
-📊 2. Deterministic Predefined Tests
-These are precision tests meant to detect performance trends over time.
-
-How it works: Uses predefined CSV files that contain exact BR order data.
-
-Purpose: Helps track regressions, improvements, or anomalies with identical input each run.
-
-Benefits:
-
-100% reproducibility.
-
-Reliable for benchmarking and trend analysis.
-
-Best Practice:
-Store results under structured folders like:
-
-pgsql
-Копировать
-Редактировать
-Results_History/
-  └── [date]/
-       ├── Redis_Initialized/
-       ├── Redis_Cache_Reset/
-       └── Configuration.md
-🧠 Extra Recommendation: Two-Phase Execution
-For predefined tests, it's highly beneficial to execute the test twice in sequence:
-
-Phase 1 – Redis Cache Reset: Flush the Redis cache before the run.
-
-Phase 2 – Redis Initialized: Run the same test immediately after, using a warm cache.
-
-This helps evaluate:
-
-Cache effectiveness.
-
-How much performance gain (if any) is achieved with caching in place.
+${__groovy(
+  import groovy.json.JsonOutput;
+  JsonOutput.toJson(
+    vars.get('containersToRecreate')
+        .split(';')
+  )
+,)}
