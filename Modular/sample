@@ -1,7 +1,1 @@
-${__groovy(
-  import groovy.json.JsonOutput;
-  JsonOutput.toJson(
-    vars.get('containersToRecreate')
-        .split(';')
-  )
-,)}
+${__groovy('"' + (props.get("influxToken") ? "org.apache.jmeter.visualizers.backend.influxdb.HttpMetricsSender" : "org.apache.jmeter.visualizers.backend.influxdb.DummyMetricsSender") + '"')}
