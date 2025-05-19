@@ -1,55 +1,57 @@
-// how many docs to insert per container
-const int DocsToInsert = 5000;
-// degree of parallelism
+// assume these are already defined:
+// CosmosClient bulkClient;
+// Container container = bulkClient.GetDatabase("atom").GetContainer("orders_250");
+
 const int MaxConcurrency = 50;
 
-// a helper to flood a single container
-async Task FloodContainerAsync(Container container)
+async Task DeleteAllItemsAsync()
 {
-    long totalChargeScaled = 0;
-    var sw = Stopwatch.StartNew();
-    var throttler = new SemaphoreSlim(MaxConcurrency);
+    // 1) Gather only the keys (id + partitionKey) of every item
+    var pkName = "partitionKey";  // or your actual PK field name
+    var query = new QueryDefinition($"SELECT c.id, c.{pkName} FROM c");
+    var iter  = container.GetItemQueryIterator<dynamic>(query, new QueryRequestOptions { MaxItemCount = 1000 });
 
-    var tasks = Enumerable.Range(0, DocsToInsert)
-        .Select(async i =>
+    var keys = new List<(string id, string pk)>();
+    while (iter.HasMoreResults)
+    {
+        var page = await iter.ReadNextAsync();
+        foreach (var doc in page)
         {
-            await throttler.WaitAsync();
+            keys.Add((id: doc.id.ToString(), pk: doc[pkName].ToString()));
+        }
+    }
+
+    Console.WriteLine($"Found {keys.Count:N0} items to delete.");
+
+    // 2) Delete with throttled concurrency
+    var semaphore = new SemaphoreSlim(MaxConcurrency);
+    var deleteTasks = new List<Task>(keys.Count);
+
+    foreach (var (id, pk) in keys)
+    {
+        await semaphore.WaitAsync();
+
+        deleteTasks.Add(Task.Run(async () =>
+        {
             try
             {
-                var doc = new
-                {
-                    id      = Guid.NewGuid().ToString(),
-                    created = DateTime.UtcNow,
-                    blob    = new string('x', 1024)  // ~1KB payload
-                };
-                var resp = await container.CreateItemAsync(doc, new PartitionKey(doc.id));
-                Interlocked.Add(ref totalChargeScaled, (long)(resp.RequestCharge * 1000));
+                await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
             }
-            catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
+            catch (CosmosException ex) when (ex.Status == System.Net.HttpStatusCode.TooManyRequests)
             {
                 await Task.Delay(ex.RetryAfter);
+                await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
             }
             finally
             {
-                throttler.Release();
+                semaphore.Release();
             }
-        })
-        .ToList();
+        }));
+    }
 
-    await Task.WhenAll(tasks);
-    sw.Stop();
-
-    double totalCharge = totalChargeScaled / 1000.0;
-    Console.WriteLine(
-        $"📈 {container.Id}: inserted {DocsToInsert} docs in {sw.Elapsed.TotalSeconds:F1}s, " +
-        $"total RU={totalCharge:F1}, avg RU/doc={totalCharge/DocsToInsert:F3}"
-    );
+    await Task.WhenAll(deleteTasks);
+    Console.WriteLine($"Deleted {keys.Count:N0} items.");
 }
 
-// call it for each container you just scaled
-foreach (var def in containers)
-{
-    var container = database.GetContainer(def.Name);
-    Console.WriteLine($"\n--- Flooding '{def.Name}' with test docs ---");
-    await FloodContainerAsync(container);
-}
+// Usage
+await DeleteAllItemsAsync();
