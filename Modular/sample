@@ -1,23 +1,9 @@
-        public async Task AdjustContainersAsync(
+       public async Task AdjustContainersAsync(
             List<ContainerDefinition> containers,
             bool bumpDbSharedIfNeeded = false)
         {
-            // 1) Read current DB-level throughput
-            int currentDbRu = 0;
-            try
-            {
-                ThroughputResponse dbRUResponse = await _database.ReadThroughputAsync();
-                // ThroughputResponse.Resource has .Throughput and .AutoscaleMaxThroughput
-                currentDbRu = dbRUResponse.Resource.AutoscaleMaxThroughput
-                              ?? dbRUResponse.Resource.Throughput
-                              ?? 0;
-            }
-            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                // No dedicated DB throughput → purely shared
-                currentDbRu = 0;
-            }
-
+            // 1) Read current DB-level throughput (int? returned, null => shared-only)
+            int currentDbRu = (await _database.ReadThroughputAsync()) ?? 0;
             Console.WriteLine($"DB shared RU/s = {currentDbRu}");
 
             // 2) Compute total requested
@@ -28,6 +14,7 @@
             if (bumpDbSharedIfNeeded && totalRequested > currentDbRu)
             {
                 Console.WriteLine($"→ Updating DB shared throughput to {totalRequested} RU/s");
+                // CreateManual sets a fixed throughput
                 var newDbProps = ThroughputProperties.CreateManualThroughput(totalRequested);
                 await _database.ReplaceThroughputAsync(newDbProps);
             }
@@ -37,21 +24,8 @@
             {
                 Container container = _database.GetContainer(def.Name);
 
-                // Read its current throughput (falls back to 0 if shared-only)
-                int curr = 0;
-                try
-                {
-                    ThroughputResponse ctRUResponse = await container.ReadThroughputAsync();
-                    curr = ctRUResponse.Resource.AutoscaleMaxThroughput
-                           ?? ctRUResponse.Resource.Throughput
-                           ?? 0;
-                }
-                catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-                {
-                    // No dedicated container throughput → inherited from DB
-                    curr = 0;
-                }
-
+                // Read its current throughput (int? returned, null => inherited/shared)
+                int curr = (await container.ReadThroughputAsync()) ?? 0;
                 Console.WriteLine($"- Container '{def.Name}' current RU/s = {curr}");
 
                 if (curr < def.AutoscaleMaxRu)
