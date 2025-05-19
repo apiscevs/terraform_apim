@@ -1,57 +1,16 @@
-// assume these are already defined:
-// CosmosClient bulkClient;
-// Container container = bulkClient.GetDatabase("atom").GetContainer("orders_250");
-
-const int MaxConcurrency = 50;
-
-async Task DeleteAllItemsAsync()
+deleteTasks.Add(Task.Run((Func<Task>)(async () =>
 {
-    // 1) Gather only the keys (id + partitionKey) of every item
-    var pkName = "partitionKey";  // or your actual PK field name
-    var query = new QueryDefinition($"SELECT c.id, c.{pkName} FROM c");
-    var iter  = container.GetItemQueryIterator<dynamic>(query, new QueryRequestOptions { MaxItemCount = 1000 });
-
-    var keys = new List<(string id, string pk)>();
-    while (iter.HasMoreResults)
+    try
     {
-        var page = await iter.ReadNextAsync();
-        foreach (var doc in page)
-        {
-            keys.Add((id: doc.id.ToString(), pk: doc[pkName].ToString()));
-        }
+        await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
     }
-
-    Console.WriteLine($"Found {keys.Count:N0} items to delete.");
-
-    // 2) Delete with throttled concurrency
-    var semaphore = new SemaphoreSlim(MaxConcurrency);
-    var deleteTasks = new List<Task>(keys.Count);
-
-    foreach (var (id, pk) in keys)
+    catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
     {
-        await semaphore.WaitAsync();
-
-        deleteTasks.Add(Task.Run(async () =>
-        {
-            try
-            {
-                await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
-            }
-            catch (CosmosException ex) when (ex.Status == System.Net.HttpStatusCode.TooManyRequests)
-            {
-                await Task.Delay(ex.RetryAfter);
-                await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        }));
+        await Task.Delay(ex.RetryAfter);
+        await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
     }
-
-    await Task.WhenAll(deleteTasks);
-    Console.WriteLine($"Deleted {keys.Count:N0} items.");
-}
-
-// Usage
-await DeleteAllItemsAsync();
+    finally
+    {
+        semaphore.Release();
+    }
+})));
