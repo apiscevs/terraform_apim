@@ -1,16 +1,48 @@
-deleteTasks.Add(Task.Run((Func<Task>)(async () =>
+const int MaxConcurrency = 50;
+var semaphore = new SemaphoreSlim(MaxConcurrency);
+
+var query     = new QueryDefinition("SELECT c.id, c.id AS pk FROM c");
+var iterator  = container.GetItemQueryIterator<dynamic>(
+                    query,
+                    continuationToken: null,
+                    requestOptions: new QueryRequestOptions { MaxItemCount = 1000 });
+
+while (iterator.HasMoreResults)
 {
-    try
+    // Fetch one page of up to 1_000 items
+    var page = await iterator.ReadNextAsync();
+
+    // For each page, collect deletes then await them before moving on
+    var deleteTasks = new List<Task>(page.Count);
+
+    foreach (var doc in page)
     {
-        await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
+        string id = doc.id;
+        string pk = doc.pk;       // here pk==id
+
+        await semaphore.WaitAsync();
+
+        // cast to Func<Task> to avoid Task.Run ambiguity
+        deleteTasks.Add(Task.Run((Func<Task>)(async () =>
+        {
+            try
+            {
+                await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
+            }
+            catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                await Task.Delay(ex.RetryAfter);
+                await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        })));
     }
-    catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
-    {
-        await Task.Delay(ex.RetryAfter);
-        await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
-    }
-    finally
-    {
-        semaphore.Release();
-    }
-})));
+
+    // Wait for this page’s deletes to finish before reading the next page
+    await Task.WhenAll(deleteTasks);
+}
+
+Console.WriteLine("All pages processed and deleted.");
