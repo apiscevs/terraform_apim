@@ -1,48 +1,80 @@
-const int MaxConcurrency = 50;
-var semaphore = new SemaphoreSlim(MaxConcurrency);
 
-var query     = new QueryDefinition("SELECT c.id, c.id AS pk FROM c");
-var iterator  = container.GetItemQueryIterator<dynamic>(
+async Task DeleteAllByPartitionBatchesAsync(Container container)
+{
+    const int MaxParallelBatches = 50;
+    const int MaxOpsPerBatch    = 100;  // transactional batch limit
+
+    // 1) Read all (id, pk) pairs
+    var pkPath = container.ReadContainerAsync().Result.Resource.PartitionKeyPath.TrimStart('/');  
+    var query = new QueryDefinition($"SELECT c.id, c.{pkPath} FROM c");
+    var iter  = container.GetItemQueryIterator<dynamic>(
                     query,
                     continuationToken: null,
                     requestOptions: new QueryRequestOptions { MaxItemCount = 1000 });
 
-while (iterator.HasMoreResults)
-{
-    // Fetch one page of up to 1_000 items
-    var page = await iterator.ReadNextAsync();
-
-    // For each page, collect deletes then await them before moving on
-    var deleteTasks = new List<Task>(page.Count);
-
-    foreach (var doc in page)
+    var pairs = new List<(string id, string pk)>();
+    while (iter.HasMoreResults)
     {
-        string id = doc.id;
-        string pk = doc.pk;       // here pk==id
-
-        await semaphore.WaitAsync();
-
-        // cast to Func<Task> to avoid Task.Run ambiguity
-        deleteTasks.Add(Task.Run((Func<Task>)(async () =>
+        foreach (var doc in await iter.ReadNextAsync())
         {
-            try
-            {
-                await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
-            }
-            catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
-            {
-                await Task.Delay(ex.RetryAfter);
-                await container.DeleteItemAsync<dynamic>(id, new PartitionKey(pk));
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        })));
+            pairs.Add((id: doc.id.ToString(), pk: doc[pkPath].ToString()));
+        }
     }
 
-    // Wait for this page’s deletes to finish before reading the next page
-    await Task.WhenAll(deleteTasks);
+    // 2) Group by partition key
+    var groups = pairs
+        .GroupBy(x => x.pk)
+        .ToDictionary(g => g.Key, g => g.Select(x => x.id).ToList());
+
+    Console.WriteLine($"Found {pairs.Count:n0} items across {groups.Count:n0} partitions.");
+
+    // 3) For each partition, split into sub-batches of 100 and execute in parallel
+    var semaphore = new SemaphoreSlim(MaxParallelBatches);
+    var batchTasks = new List<Task>();
+
+    foreach (var kv in groups)
+    {
+        string pk = kv.Key;
+        var allIds = kv.Value;
+
+        // split into chunks of 100
+        for (int i = 0; i < allIds.Count; i += MaxOpsPerBatch)
+        {
+            var chunk = allIds.Skip(i).Take(MaxOpsPerBatch).ToList();
+
+            await semaphore.WaitAsync();
+            batchTasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    var batch = container.CreateTransactionalBatch(new PartitionKey(pk));
+                    foreach (var id in chunk)
+                    {
+                        batch.DeleteItem(id);
+                    }
+
+                    var result = await batch.ExecuteAsync();
+                    if (!result.IsSuccessStatusCode)
+                    {
+                        Console.WriteLine($"Partition '{pk}' batch failed: {result.StatusCode}");
+                    }
+                }
+                catch (CosmosException ex)
+                {
+                    Console.WriteLine($"Partition '{pk}' batch error: {ex.StatusCode} – {ex.Message}");
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }));
+        }
+    }
+
+    await Task.WhenAll(batchTasks);
+    Console.WriteLine("All partitions processed and deleted.");
 }
 
-Console.WriteLine("All pages processed and deleted.");
+// Usage:
+var container = client.GetDatabase("atom").GetContainer("orders_250");
+await DeleteAllByPartitionBatchesAsync(container);
