@@ -1,45 +1,55 @@
-       public async Task AdjustContainersAsync(
-            List<ContainerDefinition> containers,
-            bool bumpDbSharedIfNeeded = false)
+// how many docs to insert per container
+const int DocsToInsert = 5000;
+// degree of parallelism
+const int MaxConcurrency = 50;
+
+// a helper to flood a single container
+async Task FloodContainerAsync(Container container)
+{
+    long totalChargeScaled = 0;
+    var sw = Stopwatch.StartNew();
+    var throttler = new SemaphoreSlim(MaxConcurrency);
+
+    var tasks = Enumerable.Range(0, DocsToInsert)
+        .Select(async i =>
         {
-            // 1) Read current DB-level throughput (int? returned, null => shared-only)
-            int currentDbRu = (await _database.ReadThroughputAsync()) ?? 0;
-            Console.WriteLine($"DB shared RU/s = {currentDbRu}");
-
-            // 2) Compute total requested
-            int totalRequested = containers.Sum(c => c.AutoscaleMaxRu);
-            Console.WriteLine($"Total requested autoscale RU/s = {totalRequested}");
-
-            // 3) Optionally bump DB shared throughput
-            if (bumpDbSharedIfNeeded && totalRequested > currentDbRu)
+            await throttler.WaitAsync();
+            try
             {
-                Console.WriteLine($"→ Updating DB shared throughput to {totalRequested} RU/s");
-                // CreateManual sets a fixed throughput
-                var newDbProps = ThroughputProperties.CreateManualThroughput(totalRequested);
-                await _database.ReplaceThroughputAsync(newDbProps);
+                var doc = new
+                {
+                    id      = Guid.NewGuid().ToString(),
+                    created = DateTime.UtcNow,
+                    blob    = new string('x', 1024)  // ~1KB payload
+                };
+                var resp = await container.CreateItemAsync(doc, new PartitionKey(doc.id));
+                Interlocked.Add(ref totalChargeScaled, (long)(resp.RequestCharge * 1000));
             }
-
-            // 4) For each container: read & adjust
-            foreach (var def in containers)
+            catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
             {
-                Container container = _database.GetContainer(def.Name);
-
-                // Read its current throughput (int? returned, null => inherited/shared)
-                int curr = (await container.ReadThroughputAsync()) ?? 0;
-                Console.WriteLine($"- Container '{def.Name}' current RU/s = {curr}");
-
-                if (curr < def.AutoscaleMaxRu)
-                {
-                    Console.WriteLine(
-                        $"  → Scaling '{def.Name}' to autoscale max {def.AutoscaleMaxRu}"
-                    );
-                    var autoscaleProps =
-                        ThroughputProperties.CreateAutoscaleThroughput(def.AutoscaleMaxRu);
-                    await container.ReplaceThroughputAsync(autoscaleProps);
-                }
-                else
-                {
-                    Console.WriteLine($"  → No change needed for '{def.Name}'");
-                }
+                await Task.Delay(ex.RetryAfter);
             }
-        }
+            finally
+            {
+                throttler.Release();
+            }
+        })
+        .ToList();
+
+    await Task.WhenAll(tasks);
+    sw.Stop();
+
+    double totalCharge = totalChargeScaled / 1000.0;
+    Console.WriteLine(
+        $"📈 {container.Id}: inserted {DocsToInsert} docs in {sw.Elapsed.TotalSeconds:F1}s, " +
+        $"total RU={totalCharge:F1}, avg RU/doc={totalCharge/DocsToInsert:F3}"
+    );
+}
+
+// call it for each container you just scaled
+foreach (var def in containers)
+{
+    var container = database.GetContainer(def.Name);
+    Console.WriteLine($"\n--- Flooding '{def.Name}' with test docs ---");
+    await FloodContainerAsync(container);
+}
