@@ -1,36 +1,23 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Azure.Cosmos;
-
-namespace CosmosScaleWithCosmosClient
-{
-    public class ContainerDefinition
-    {
-        public string Name { get; set; }
-        public int AutoscaleMaxRu { get; set; }
-    }
-
-    public class ThroughputAdjuster
-    {
-        private readonly CosmosClient _client;
-        private readonly CosmosDatabase _database;
-
-        public ThroughputAdjuster(string endpointUri, string primaryKey, string databaseName)
-        {
-            _client = new CosmosClient(endpointUri, primaryKey);
-            _database = _client.GetDatabase(databaseName);
-        }
-
         public async Task AdjustContainersAsync(
             List<ContainerDefinition> containers,
             bool bumpDbSharedIfNeeded = false)
         {
             // 1) Read current DB-level throughput
-            var dbThroughputResponse = await _database.ReadThroughputPropertiesAsync();
-            var dbProps = dbThroughputResponse.Resource;
-            int currentDbRu = dbProps.AutoscaleMaxThroughput ?? dbProps.Throughput;
+            int currentDbRu = 0;
+            try
+            {
+                ThroughputResponse dbRUResponse = await _database.ReadThroughputAsync();
+                // ThroughputResponse.Resource has .Throughput and .AutoscaleMaxThroughput
+                currentDbRu = dbRUResponse.Resource.AutoscaleMaxThroughput
+                              ?? dbRUResponse.Resource.Throughput
+                              ?? 0;
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // No dedicated DB throughput → purely shared
+                currentDbRu = 0;
+            }
+
             Console.WriteLine($"DB shared RU/s = {currentDbRu}");
 
             // 2) Compute total requested
@@ -42,41 +29,39 @@ namespace CosmosScaleWithCosmosClient
             {
                 Console.WriteLine($"→ Updating DB shared throughput to {totalRequested} RU/s");
                 var newDbProps = ThroughputProperties.CreateManualThroughput(totalRequested);
-                await _database.ReplaceThroughputPropertiesAsync(newDbProps);
+                await _database.ReplaceThroughputAsync(newDbProps);
             }
 
             // 4) For each container: read & adjust
             foreach (var def in containers)
             {
-                var container = _database.GetContainer(def.Name);
+                Container container = _database.GetContainer(def.Name);
 
                 // Read its current throughput (falls back to 0 if shared-only)
                 int curr = 0;
                 try
                 {
-                    var ctResponse = await container.ReadThroughputPropertiesAsync();
-                    var ctProps = ctResponse.Resource;
-                    curr = ctProps.AutoscaleMaxThroughput ?? ctProps.Throughput;
+                    ThroughputResponse ctRUResponse = await container.ReadThroughputAsync();
+                    curr = ctRUResponse.Resource.AutoscaleMaxThroughput
+                           ?? ctRUResponse.Resource.Throughput
+                           ?? 0;
                 }
-                catch (CosmosException ex) when (ex.Status == 404)
+                catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
-                    // No dedicated throughput → inherited from DB
+                    // No dedicated container throughput → inherited from DB
                     curr = 0;
                 }
 
-                Console.WriteLine(
-                    $"- Container '{def.Name}' current RU/s = {curr}"
-                );
+                Console.WriteLine($"- Container '{def.Name}' current RU/s = {curr}");
 
                 if (curr < def.AutoscaleMaxRu)
                 {
                     Console.WriteLine(
                         $"  → Scaling '{def.Name}' to autoscale max {def.AutoscaleMaxRu}"
                     );
-
                     var autoscaleProps =
                         ThroughputProperties.CreateAutoscaleThroughput(def.AutoscaleMaxRu);
-                    await container.ReplaceThroughputPropertiesAsync(autoscaleProps);
+                    await container.ReplaceThroughputAsync(autoscaleProps);
                 }
                 else
                 {
@@ -84,26 +69,3 @@ namespace CosmosScaleWithCosmosClient
                 }
             }
         }
-    }
-
-    class Program
-    {
-        static async Task Main()
-        {
-            var adjuster = new ThroughputAdjuster(
-                endpointUri: "https://your-account.documents.azure.com:443/",
-                primaryKey:   "your-primary-key",
-                databaseName: "atom"
-            );
-
-            var containers = new List<ContainerDefinition>
-            {
-                new ContainerDefinition { Name = "submittedOrderMetaData", AutoscaleMaxRu = 4000 },
-                new ContainerDefinition { Name = "changeFeedLeases",     AutoscaleMaxRu = 1000 },
-                new ContainerDefinition { Name = "dropdownReferenceData",AutoscaleMaxRu = 2000 },
-            };
-
-            await adjuster.AdjustContainersAsync(containers, bumpDbSharedIfNeeded: true);
-        }
-    }
-}
