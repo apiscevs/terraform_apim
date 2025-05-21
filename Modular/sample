@@ -1,56 +1,21 @@
-public class AtomCosmosSerializer : CosmosSerializer
-    {
-        private readonly JsonSerializerSettings _serializerSettings;
-
-        public AtomCosmosSerializer(JsonSerializerSettings serializerSettings)
-        {
-            _serializerSettings = serializerSettings ?? throw new ArgumentNullException(nameof(serializerSettings));
-        }
-
-        private JsonSerializer CreateSerializer() => JsonSerializer.Create(_serializerSettings);
-
-        public override T FromStream<T>(Stream stream)
-        {
-            if (stream == null)
-            {
-                return default!;
-            }
-
-            // Ensure we fully consume and close the incoming stream per Cosmos SDK requirements
-            using (stream)
-            using var streamReader = new StreamReader(
-                stream,
-                Encoding.UTF8,
-                detectEncodingFromByteOrderMarks: false,
-                bufferSize: 1024,
-                leaveOpen: false);
-            
-            using var jsonReader = new JsonTextReader(streamReader)
-            {
-                // CloseInput true ensures underlying stream is closed
-                CloseInput = true
-            };
-
-            // Directly deserialize, let JsonTextReader advance as needed
-            var serializer = CreateSerializer();
-            var data = serializer.Deserialize<T>(jsonReader);
-            return data!;
-        }
-
         public override Stream ToStream<T>(T input)
         {
-            // Write JSON directly to a MemoryStream to avoid intermediate strings/byte[]
-            var memoryStream = new MemoryStream();
-
-            using (var streamWriter = new StreamWriter(
-                memoryStream,
-                Encoding.UTF8,
-                bufferSize: 1024,
-                leaveOpen: true))
-            using (var jsonWriter = new JsonTextWriter(streamWriter)
+            // Revert to original string-based serialization for compatibility
+            using var stringWriter = new StringWriter();
+            using (var jsonWriter = new JsonTextWriter(stringWriter)
             {
                 Formatting = Formatting.None
             })
+            {
+                var serializer = CreateSerializer();
+                // Note: Serialize(TextWriter, object) ensures the same behavior as before
+                serializer.Serialize(stringWriter, input);
+            }
+
+            string json = stringWriter.ToString();
+            byte[] bytes = Encoding.UTF8.GetBytes(json);
+            return new MemoryStream(bytes);
+        })
             {
                 var serializer = CreateSerializer();
                 serializer.Serialize(jsonWriter, input);
