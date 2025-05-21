@@ -1,30 +1,37 @@
-private JsonSerializer CreateSerializer() => JsonSerializer.Create(_serializerSettings);
+public class AtomCosmosSerializer : CosmosSerializer
+    {
+        private readonly JsonSerializerSettings _serializerSettings;
+
+        public AtomCosmosSerializer(JsonSerializerSettings serializerSettings)
+        {
+            _serializerSettings = serializerSettings ?? throw new ArgumentNullException(nameof(serializerSettings));
+        }
+
+        private JsonSerializer CreateSerializer() => JsonSerializer.Create(_serializerSettings);
 
         public override T FromStream<T>(Stream stream)
         {
-            if (stream == null || !stream.CanRead)
+            if (stream == null)
             {
                 return default!;
             }
 
-            // Read UTF-8 JSON directly, small buffer, leave stream open
+            // Ensure we fully consume and close the incoming stream per Cosmos SDK requirements
+            using (stream)
             using var streamReader = new StreamReader(
                 stream,
                 Encoding.UTF8,
                 detectEncodingFromByteOrderMarks: false,
                 bufferSize: 1024,
-                leaveOpen: true);
-
+                leaveOpen: false);
+            
             using var jsonReader = new JsonTextReader(streamReader)
             {
-                CloseInput = false
+                // CloseInput true ensures underlying stream is closed
+                CloseInput = true
             };
 
-            if (!jsonReader.Read())
-            {
-                return default!;
-            }
-
+            // Directly deserialize, let JsonTextReader advance as needed
             var serializer = CreateSerializer();
             var data = serializer.Deserialize<T>(jsonReader);
             return data!;
