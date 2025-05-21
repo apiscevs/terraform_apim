@@ -1,28 +1,18 @@
-        public override Stream ToStream<T>(T input)
+public override Stream ToStream<T>(T input)
         {
-            // Revert to original string-based serialization for compatibility
+            // Serialize to JSON string using JsonTextWriter
             using var stringWriter = new StringWriter();
-            using (var jsonWriter = new JsonTextWriter(stringWriter)
+            using var jsonWriter = new JsonTextWriter(stringWriter)
             {
                 Formatting = Formatting.None
-            })
-            {
-                var serializer = CreateSerializer();
-                // Note: Serialize(TextWriter, object) ensures the same behavior as before
-                serializer.Serialize(stringWriter, input);
-            }
+            };
 
+            var serializer = CreateSerializer();
+            serializer.Serialize(jsonWriter, input);
+            jsonWriter.Flush();
+
+            // Convert string to UTF-8 bytes and wrap in MemoryStream
             string json = stringWriter.ToString();
             byte[] bytes = Encoding.UTF8.GetBytes(json);
             return new MemoryStream(bytes);
-        })
-            {
-                var serializer = CreateSerializer();
-                serializer.Serialize(jsonWriter, input);
-                jsonWriter.Flush();
-                streamWriter.Flush();
-            }
-
-            memoryStream.Position = 0;
-            return memoryStream;
         }
