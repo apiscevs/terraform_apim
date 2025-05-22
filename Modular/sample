@@ -1,18 +1,33 @@
-public override Stream ToStream<T>(T input)
-        {
-            // Serialize to JSON string using JsonTextWriter
-            using var stringWriter = new StringWriter();
-            using var jsonWriter = new JsonTextWriter(stringWriter)
-            {
-                Formatting = Formatting.None
-            };
+public class OrderHashDistributedCache
+{
+    private readonly IEasyCachingProvider _cache;
+    private readonly int _absoluteExpirationInSeconds;
 
-            var serializer = CreateSerializer();
-            serializer.Serialize(jsonWriter, input);
-            jsonWriter.Flush();
+    public OrderHashDistributedCache(IEasyCachingProvider cache, int absoluteExpirationInSeconds)
+    {
+        _cache = cache;
+        _absoluteExpirationInSeconds = absoluteExpirationInSeconds;
+    }
 
-            // Convert string to UTF-8 bytes and wrap in MemoryStream
-            string json = stringWriter.ToString();
-            byte[] bytes = Encoding.UTF8.GetBytes(json);
-            return new MemoryStream(bytes);
-        }
+    /// <summary>
+    /// Returns true if this is a duplicate (already exists), false if it was newly added.
+    /// </summary>
+    public async Task<bool> IsDuplicateAndAddAsync(string cacheKey, MarketDestination market, string party)
+    {
+        string fullKey = CreateCompositeKey(market, party, cacheKey);
+
+        // Try to add — only if it doesn't exist yet
+        bool added = await _cache.SetAsync(
+            fullKey,
+            "1", // dummy value
+            TimeSpan.FromSeconds(_absoluteExpirationInSeconds),
+            when: EasyCaching.Core.Enums.CacheSetWhen.NotExists
+        );
+
+        // If we failed to add, it's a duplicate
+        return !added;
+    }
+
+    private static string CreateCompositeKey(MarketDestination market, string party, string orderKey)
+        => $"borrower:{market}:{party}:{orderKey}";
+}
