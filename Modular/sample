@@ -1,40 +1,28 @@
-public class DuplicateOrderService
+private TimeSpan? _duration;
+private readonly SemaphoreSlim _initLock = new(1, 1);
+private readonly IRedisCachingProvider _redis;
+
+public DuplicateOrderService(IRedisCachingProvider redis)
 {
-    private static TimeSpan? _cachedDuration;
-    private static readonly SemaphoreSlim _lock = new(1, 1);
+    _redis = redis;
+}
 
-    private readonly IRedisCachingProvider _redis;
-    private TimeSpan _duration;
+private async Task EnsureInitializedAsync()
+{
+    if (_duration is not null)
+        return;
 
-    public DuplicateOrderService(IRedisCachingProvider redis)
+    await _initLock.WaitAsync();
+    try
     {
-        _redis = redis;
-    }
-
-    public async Task InitializeAsync()
-    {
-        if (_cachedDuration != null)
+        if (_duration is null) // double-check
         {
-            _duration = _cachedDuration.Value;
-            return;
-        }
-
-        await _lock.WaitAsync();
-        try
-        {
-            if (_cachedDuration == null)
-            {
-                var value = await _redis.GetAsync<int>("MqDuplicateOrderDurationSeconds");
-                _cachedDuration = TimeSpan.FromSeconds(value.Value); // throws if missing
-            }
-
-            _duration = _cachedDuration.Value;
-        }
-        finally
-        {
-            _lock.Release();
+            var result = await _redis.GetAsync<int>("MqDuplicateOrderDurationSeconds");
+            _duration = TimeSpan.FromSeconds(result.Value);
         }
     }
-
-    // Now use _duration safely
+    finally
+    {
+        _initLock.Release();
+    }
 }
