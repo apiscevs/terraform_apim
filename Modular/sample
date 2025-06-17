@@ -1,28 +1,148 @@
-private TimeSpan? _duration;
-private readonly SemaphoreSlim _initLock = new(1, 1);
-private readonly IRedisCachingProvider _redis;
+1  Request‑scoped dictionary
+csharp
+Копировать
+Редактировать
+// RequestCache.cs
+using System.Collections.Generic;
 
-public DuplicateOrderService(IRedisCachingProvider redis)
+namespace YourApp.Caching;
+
+/// <summary>
+/// First‑level cache that lives only for the DI scope (one HTTP request / message).
+/// </summary>
+public sealed class RequestCache
 {
-    _redis = redis;
-}
+    private readonly Dictionary<string, object> _data = new();
 
-private async Task EnsureInitializedAsync()
-{
-    if (_duration is not null)
-        return;
-
-    await _initLock.WaitAsync();
-    try
+    public bool TryGet<T>(string key, out T value)
     {
-        if (_duration is null) // double-check
+        if (_data.TryGetValue(key, out var obj) && obj is T t)
         {
-            var result = await _redis.GetAsync<int>("MqDuplicateOrderDurationSeconds");
-            _duration = TimeSpan.FromSeconds(result.Value);
+            value = t;
+            return true;
         }
+        value = default!;
+        return false;
     }
-    finally
+
+    public void Set<T>(string key, T value) => _data[key] = value!;
+}
+2  Decorator that checks the scoped cache first
+csharp
+Копировать
+Редактировать
+// TwoLevelEasyCachingProvider.cs
+using System;
+using System.Threading.Tasks;
+using EasyCaching.Core;
+
+namespace YourApp.Caching;
+
+/// <summary>
+/// Wraps the real EasyCaching provider so Redis is hit at most once per key per request.
+/// </summary>
+public sealed class TwoLevelEasyCachingProvider : IEasyCachingProvider
+{
+    private readonly IEasyCachingProvider _inner;
+    private readonly RequestCache         _request;
+
+    public TwoLevelEasyCachingProvider(
+        IEasyCachingProvider inner,
+        RequestCache requestCache)
     {
-        _initLock.Release();
+        _inner   = inner;
+        _request = requestCache;
+    }
+
+    public async Task<CacheValue<T>> GetAsync<T>(string key)
+    {
+        if (_request.TryGet<T>(key, out var local))
+            return new CacheValue<T>(local, true);
+
+        var remote = await _inner.GetAsync<T>(key);
+        if (remote.HasValue)
+            _request.Set(key, remote.Value!);
+
+        return remote;
+    }
+
+    public Task SetAsync<T>(string key, T value, TimeSpan? exp = null)
+    {
+        _request.Set(key, value);
+        return _inner.SetAsync(key, value, exp);
+    }
+
+    // ---- pass‑throughs for sync API & misc members ----
+    public CacheValue<T> Get<T>(string key)                        => _inner.Get<T>(key);
+    public void          Set<T>(string key, T value, TimeSpan? e)  => _inner.Set(key, value, e);
+    public bool          Exists(string key)                        => _inner.Exists(key);
+    public Task<bool>    ExistsAsync(string key)                   => _inner.ExistsAsync(key);
+    public void          Remove(string key)                        => _inner.Remove(key);
+    public Task<bool>    RemoveAsync(string key)                   => _inner.RemoveAsync(key);
+    public void          Flush()                                   => _inner.Flush();
+    public Task          FlushAsync()                              => _inner.FlushAsync();
+    public int           MaxRdSecond                               => _inner.MaxRdSecond;
+    public int           Order                                    => _inner.Order;
+    public string        Name                                     => _inner.Name;
+}
+3  Clean ConfigureCaching extension
+csharp
+Копировать
+Редактировать
+// CachingSetup.cs
+using EasyCaching.Core;
+using EasyCaching.InMemory;
+using EasyCaching.Redis;
+using Microsoft.Extensions.DependencyInjection;
+using Serilog;
+
+public static class CachingSetup
+{
+    public static void ConfigureCaching(
+        this IServiceCollection services,
+        RedisConfiguration?     cacheCfg,
+        ILogger                 logger)
+    {
+        cacheCfg ??= new RedisConfiguration();
+        services.AddSingleton(cacheCfg);
+
+        // 1️⃣  request‑scoped dictionary
+        services.AddScoped<RequestCache>();
+
+        // 2️⃣  vanilla EasyCaching registration (exactly as before)
+        services.AddEasyCaching(opts =>
+        {
+            logger.Information("Configuring caching");
+            opts.WithJson();                       // System.Text.Json
+            opts.UseInMemory("MemCache");          // always have an in‑proc fallback
+
+            if (!string.IsNullOrWhiteSpace(cacheCfg.Host) && cacheCfg.Port is not null)
+            {
+                opts.UseRedis(redis =>
+                {
+                    redis.DBConfig.Endpoints.Add(
+                        new ServerEndPoint(cacheCfg.Host, cacheCfg.Port.Value));
+
+                    if (!string.IsNullOrWhiteSpace(cacheCfg.Password))
+                        redis.DBConfig.Password = cacheCfg.Password;
+
+                    redis.DBConfig.IsSsl     = cacheCfg.IsSsl;
+                    redis.SerializerName     = "json";
+                }, "redis");
+            }
+            else
+            {
+                logger.Information("Redis host empty → using only in‑memory cache");
+            }
+        });
+
+        // 3️⃣  decorate the named \"redis\" provider with the scoped façade
+        services.AddScoped<IEasyCachingProvider>(sp =>
+        {
+            var factory  = sp.GetRequiredService<IEasyCachingProviderFactory>();
+            var redis    = factory.GetCachingProvider("redis");      // raw provider
+            var reqCache = sp.GetRequiredService<RequestCache>();    // scoped store
+            return new TwoLevelEasyCachingProvider(redis, reqCache);
+        });
     }
 }
