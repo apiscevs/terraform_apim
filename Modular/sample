@@ -137,3 +137,132 @@ services.AddSingleton<IEasyCachingProvider>(sp =>
     var redis   = factory.GetCachingProvider("redis");          // raw singleton
     return new PerRequestEasyCachingProvider(redis);            // decorated singleton
 });
+
+
+
+=============
+
+namespace YourApp.Caching;
+
+public class CacheSettings
+{
+    /// <summary>
+    /// Keys that start with one of these prefixes are cached in IMemoryCache
+    /// for <see cref="StaticTtl"/> (default: 10 min) in addition to the
+    /// per‑request AsyncLocal layer.
+    /// </summary>
+    public string[] StaticKeyPrefixes { get; init; } = Array.Empty<string>();
+
+    public TimeSpan StaticTtl { get; init; } = TimeSpan.FromMinutes(10);
+}
+appsettings.json
+
+json
+Копировать
+Редактировать
+{
+  "CacheSettings": {
+    "StaticKeyPrefixes": [ "countries:", "lookups:", "config:" ],
+    "StaticTtl": "00:10:00"
+  }
+}
+2  Decorator with three tiers
+(AsyncLocal → IMemoryCache → Redis)
+
+csharp
+Копировать
+Редактировать
+// TieredEasyCachingProvider.cs
+using System;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using EasyCaching.Core;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
+
+namespace YourApp.Caching;
+
+public sealed class TieredEasyCachingProvider : DelegatingEasyCachingProvider
+{
+    private readonly IMemoryCache                     _staticCache;
+    private readonly CacheSettings                    _cfg;
+    private readonly string[]                         _prefixes;
+
+    public TieredEasyCachingProvider(
+        IEasyCachingProvider  inner,
+        IMemoryCache          staticCache,
+        IOptions<CacheSettings> options)
+        : base(inner)
+    {
+        _staticCache = staticCache;
+        _cfg         = options.Value;
+        _prefixes    = _cfg.StaticKeyPrefixes;
+    }
+
+    private bool IsStatic(string key) =>
+        _prefixes.Any(p => key.StartsWith(p, StringComparison.Ordinal));
+
+    /* ───── GET (async) ───── */
+
+    public override async Task<CacheValue<T>> GetAsync<T>(
+        string key, CancellationToken tk = default)
+    {
+        // 1) per‑request
+        if (AmbientRequestCache.TryGet<T>(key, out var reqVal))
+            return new CacheValue<T>(reqVal, true);
+
+        // 2) 10‑min in‑proc layer (only for static keys)
+        if (IsStatic(key) && _staticCache.TryGetValue<T>(key, out var staticVal))
+        {
+            AmbientRequestCache.Set(key, staticVal);
+            return new CacheValue<T>(staticVal, true);
+        }
+
+        // 3) fall back to Redis
+        var remote = await base.GetAsync<T>(key, tk);
+        if (remote.HasValue)
+        {
+            AmbientRequestCache.Set(key, remote.Value!);
+
+            if (IsStatic(key))
+                _staticCache.Set(key, remote.Value!,
+                    new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = _cfg.StaticTtl
+                    });
+        }
+        return remote;
+    }
+
+    /* ───── SET (async) ───── */
+
+    public override Task SetAsync<T>(
+        string key, T value, TimeSpan? exp = null, CancellationToken tk = default)
+    {
+        AmbientRequestCache.Set(key, value);
+
+        if (IsStatic(key))
+            _staticCache.Set(key, value,
+                new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = _cfg.StaticTtl
+                });
+
+        return base.SetAsync(key, value, exp, tk);
+    }
+}
+Note Only three overrides (GetAsync ×2 and SetAsync) changed; all
+other members still pass straight through the base class.
+
+3  DI wiring (Scrutor)
+csharp
+Копировать
+Редактировать
+// Program.cs or Startup.cs
+builder.Services.Configure<CacheSettings>(
+    builder.Configuration.GetSection("CacheSettings"));
+
+builder.Services.AddMemoryCache();  // singleton IMemoryCache
+
+builder.Services.Decorate<IEasyCachingProvider, TieredEasyCachingProvider>();
