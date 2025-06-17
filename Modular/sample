@@ -28,7 +28,98 @@ public sealed class RequestCache
 
     public void Set<T>(string key, T value) => _data[key] = value!;
 }
-2  Wrapper that checks the scoped cache first, then Redis
+// DelegatingEasyCachingProvider.cs
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using EasyCaching.Core;
+
+namespace YourApp.Caching;
+
+/// <summary>
+/// Implements every member of <see cref="IEasyCachingProvider"/> by
+/// forwarding to the <c>Inner</c> provider.  Child classes override
+/// only the members they need.
+/// </summary>
+public abstract class DelegatingEasyCachingProvider : IEasyCachingProvider
+{
+    protected readonly IEasyCachingProvider Inner;
+
+    protected DelegatingEasyCachingProvider(IEasyCachingProvider inner)
+        => Inner = inner;
+
+    /* ------------- properties ------------- */
+    public virtual string Name           => Inner.Name;
+    public virtual int    Order          => Inner.Order;
+    public virtual int    MaxRdSecond    => Inner.MaxRdSecond;
+    public virtual bool   IsDistributedCache => Inner.IsDistributedCache;
+
+    /* ------------- core read APIs ------------- */
+    public virtual CacheValue<T> Get<T>(string key) => Inner.Get<T>(key);
+    public virtual IDictionary<string, CacheValue<T>> GetAll<T>(IEnumerable<string> keys)
+        => Inner.GetAll<T>(keys);
+    public virtual CacheValue<T> GetByPrefix<T>(string prefix)
+        => Inner.GetByPrefix<T>(prefix);
+    public virtual IEnumerable<string> GetAllKeysByPrefix(string prefix)
+        => Inner.GetAllKeysByPrefix(prefix);
+
+    public virtual Task<CacheValue<T>> GetAsync<T>(string key,
+                                                   CancellationToken token = default)
+        => Inner.GetAsync<T>(key, token);
+
+    public virtual Task<CacheValue<T>> GetAsync<T>(string            key,
+                                                   Func<Task<T>>     factory,
+                                                   TimeSpan?         expiration   = null,
+                                                   CancellationToken token        = default)
+        => Inner.GetAsync(key, factory, expiration, token);
+
+    public virtual Task<IDictionary<string, CacheValue<T>>> GetAllAsync<T>(
+            IEnumerable<string> keys,
+            CancellationToken token = default)
+        => Inner.GetAllAsync<T>(keys, token);
+
+    /* ------------- core write APIs ------------- */
+    public virtual void Set<T>(string key, T value, TimeSpan? expiration = null)
+        => Inner.Set(key, value, expiration);
+
+    public virtual Task SetAsync<T>(string            key,
+                                    T                 value,
+                                    TimeSpan?         expiration   = null,
+                                    CancellationToken token        = default)
+        => Inner.SetAsync(key, value, expiration, token);
+
+    public virtual void Remove(string key)                   => Inner.Remove(key);
+    public virtual Task<bool> RemoveAsync(string key,
+                                          CancellationToken token = default)
+        => Inner.RemoveAsync(key, token);
+
+    public virtual void Flush()                              => Inner.Flush();
+    public virtual Task FlushAsync(CancellationToken token = default)
+        => Inner.FlushAsync(token);
+
+    public virtual bool Exists(string key)                   => Inner.Exists(key);
+    public virtual Task<bool> ExistsAsync(string key,
+                                          CancellationToken token = default)
+        => Inner.ExistsAsync(key, token);
+
+    /* --- prefix / pattern helpers (pass‑through) --- */
+    public virtual void RemoveByPrefix(string prefix)
+        => Inner.RemoveByPrefix(prefix);
+    public virtual Task RemoveByPrefixAsync(string prefix,
+                                            CancellationToken token = default)
+        => Inner.RemoveByPrefixAsync(prefix, token);
+
+    public virtual IEnumerable<string> GetKeysByPrefix(string prefix)
+        => Inner.GetKeysByPrefix(prefix);
+    public virtual Task<IEnumerable<string>> GetKeysByPrefixAsync(string prefix,
+                                                                  CancellationToken token = default)
+        => Inner.GetKeysByPrefixAsync(prefix, token);
+
+    /* ---- any new IEasyCachingProvider members in future will compile‑fail
+           here, reminding you to forward or override them. ---- */
+}
+2  ScopedEasyCachingProvider – the real decorator
 csharp
 Копировать
 Редактировать
@@ -37,45 +128,41 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using EasyCaching.Core;
-using EasyCaching.Core.Internal;   // ⚠️ brings in CachingProviderWrapperBase
 
 namespace YourApp.Caching;
 
 /// <summary>
-/// Decorator: intercepts Get*/Set* calls so Redis is hit at most *once* per key
-/// per request.  Everything else is forwarded by the base class.
+/// Adds a *per‑request* in‑memory layer in front of Redis so that the
+/// same key is fetched from Redis only once within the same DI scope.
 /// </summary>
-public sealed class ScopedEasyCachingProvider : CachingProviderWrapperBase
+public sealed class ScopedEasyCachingProvider : DelegatingEasyCachingProvider
 {
     private readonly RequestCache _request;
 
     public ScopedEasyCachingProvider(
-        IEasyCachingProvider inner,      // real Redis provider
+        IEasyCachingProvider inner,
         RequestCache         requestCache)
-        : base(inner)                    // base class wires all pass‑throughs
+        : base(inner)
     {
         _request = requestCache;
     }
 
-    /* -------------------- overrides -------------------- */
+    /* -------- intercept the three hot paths -------- */
 
     public override async Task<CacheValue<T>> GetAsync<T>(
         string key,
         CancellationToken token = default)
     {
-        // 1️⃣  look in the per‑request dictionary
         if (_request.TryGet<T>(key, out var local))
             return new CacheValue<T>(local, true);
 
-        // 2️⃣  miss → delegate to Redis
         var remote = await base.GetAsync<T>(key, token);
-
-        // 3️⃣  populate request cache so the next call is in‑memory
         if (remote.HasValue)
             _request.Set(key, remote.Value!);
 
         return remote;
     }
+
 
     public override async Task<CacheValue<T>> GetAsync<T>(
         string            key,
@@ -93,18 +180,17 @@ public sealed class ScopedEasyCachingProvider : CachingProviderWrapperBase
         return remote;
     }
 
+
     public override Task SetAsync<T>(
         string            key,
         T                 value,
         TimeSpan?         expiration   = null,
         CancellationToken token        = default)
     {
-        _request.Set(key, value);            // keep request‑scope in sync
+        _request.Set(key, value);            // keep request cache in sync
         return base.SetAsync(key, value, expiration, token);
     }
 }
-CachingProviderWrapperBase already implements every other interface member by
-forwarding it to the inner provider, so we only override what we care about.
 
 3  Single extension to wire everything up
 csharp
