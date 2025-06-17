@@ -1,23 +1,26 @@
-1  Request‑scoped dictionary (lives exactly one DI scope)
+1  Ambient request buffer
 csharp
 Копировать
 Редактировать
-// RequestCache.cs
+// AmbientRequestCache.cs
 using System.Collections.Generic;
+using System.Threading;
 
 namespace YourApp.Caching;
 
 /// <summary>
-/// First‑level cache that survives only for the lifetime of the current
-/// dependency‑injection *scope* (e.g. one HTTP request or message).
+/// Holds a per‑async‑flow (per HTTP request / message) dictionary.
 /// </summary>
-public sealed class RequestCache
+public static class AmbientRequestCache
 {
-    private readonly Dictionary<string, object> _data = new();
+    private static readonly AsyncLocal<Dictionary<string, object>> _state = new();
 
-    public bool TryGet<T>(string key, out T value)
+    private static Dictionary<string, object> State
+        => _state.Value ??= new Dictionary<string, object>();
+
+    public static bool TryGet<T>(string key, out T value)
     {
-        if (_data.TryGetValue(key, out var obj) && obj is T t)
+        if (State.TryGetValue(key, out var o) && o is T t)
         {
             value = t;
             return true;
@@ -26,104 +29,15 @@ public sealed class RequestCache
         return false;
     }
 
-    public void Set<T>(string key, T value) => _data[key] = value!;
+    public static void Set<T>(string key, T value) => State[key] = value!;
+
+    public static void Clear() => State.Clear();
 }
-// DelegatingEasyCachingProvider.cs
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using EasyCaching.Core;
-
-namespace YourApp.Caching;
-
-/// <summary>
-/// Implements every member of <see cref="IEasyCachingProvider"/> by
-/// forwarding to the <c>Inner</c> provider.  Child classes override
-/// only the members they need.
-/// </summary>
-public abstract class DelegatingEasyCachingProvider : IEasyCachingProvider
-{
-    protected readonly IEasyCachingProvider Inner;
-
-    protected DelegatingEasyCachingProvider(IEasyCachingProvider inner)
-        => Inner = inner;
-
-    /* ------------- properties ------------- */
-    public virtual string Name           => Inner.Name;
-    public virtual int    Order          => Inner.Order;
-    public virtual int    MaxRdSecond    => Inner.MaxRdSecond;
-    public virtual bool   IsDistributedCache => Inner.IsDistributedCache;
-
-    /* ------------- core read APIs ------------- */
-    public virtual CacheValue<T> Get<T>(string key) => Inner.Get<T>(key);
-    public virtual IDictionary<string, CacheValue<T>> GetAll<T>(IEnumerable<string> keys)
-        => Inner.GetAll<T>(keys);
-    public virtual CacheValue<T> GetByPrefix<T>(string prefix)
-        => Inner.GetByPrefix<T>(prefix);
-    public virtual IEnumerable<string> GetAllKeysByPrefix(string prefix)
-        => Inner.GetAllKeysByPrefix(prefix);
-
-    public virtual Task<CacheValue<T>> GetAsync<T>(string key,
-                                                   CancellationToken token = default)
-        => Inner.GetAsync<T>(key, token);
-
-    public virtual Task<CacheValue<T>> GetAsync<T>(string            key,
-                                                   Func<Task<T>>     factory,
-                                                   TimeSpan?         expiration   = null,
-                                                   CancellationToken token        = default)
-        => Inner.GetAsync(key, factory, expiration, token);
-
-    public virtual Task<IDictionary<string, CacheValue<T>>> GetAllAsync<T>(
-            IEnumerable<string> keys,
-            CancellationToken token = default)
-        => Inner.GetAllAsync<T>(keys, token);
-
-    /* ------------- core write APIs ------------- */
-    public virtual void Set<T>(string key, T value, TimeSpan? expiration = null)
-        => Inner.Set(key, value, expiration);
-
-    public virtual Task SetAsync<T>(string            key,
-                                    T                 value,
-                                    TimeSpan?         expiration   = null,
-                                    CancellationToken token        = default)
-        => Inner.SetAsync(key, value, expiration, token);
-
-    public virtual void Remove(string key)                   => Inner.Remove(key);
-    public virtual Task<bool> RemoveAsync(string key,
-                                          CancellationToken token = default)
-        => Inner.RemoveAsync(key, token);
-
-    public virtual void Flush()                              => Inner.Flush();
-    public virtual Task FlushAsync(CancellationToken token = default)
-        => Inner.FlushAsync(token);
-
-    public virtual bool Exists(string key)                   => Inner.Exists(key);
-    public virtual Task<bool> ExistsAsync(string key,
-                                          CancellationToken token = default)
-        => Inner.ExistsAsync(key, token);
-
-    /* --- prefix / pattern helpers (pass‑through) --- */
-    public virtual void RemoveByPrefix(string prefix)
-        => Inner.RemoveByPrefix(prefix);
-    public virtual Task RemoveByPrefixAsync(string prefix,
-                                            CancellationToken token = default)
-        => Inner.RemoveByPrefixAsync(prefix, token);
-
-    public virtual IEnumerable<string> GetKeysByPrefix(string prefix)
-        => Inner.GetKeysByPrefix(prefix);
-    public virtual Task<IEnumerable<string>> GetKeysByPrefixAsync(string prefix,
-                                                                  CancellationToken token = default)
-        => Inner.GetKeysByPrefixAsync(prefix, token);
-
-    /* ---- any new IEasyCachingProvider members in future will compile‑fail
-           here, reminding you to forward or override them. ---- */
-}
-2  ScopedEasyCachingProvider – the real decorator
+2  Singleton wrapper that uses the ambient buffer
 csharp
 Копировать
 Редактировать
-// ScopedEasyCachingProvider.cs
+// PerRequestEasyCachingProvider.cs
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -132,37 +46,29 @@ using EasyCaching.Core;
 namespace YourApp.Caching;
 
 /// <summary>
-/// Adds a *per‑request* in‑memory layer in front of Redis so that the
-/// same key is fetched from Redis only once within the same DI scope.
+/// Singleton decorator: ensures one Redis round‑trip per key per request
+/// by using an AsyncLocal dictionary.
 /// </summary>
-public sealed class ScopedEasyCachingProvider : DelegatingEasyCachingProvider
+public sealed class PerRequestEasyCachingProvider : DelegatingEasyCachingProvider
 {
-    private readonly RequestCache _request;
+    public PerRequestEasyCachingProvider(IEasyCachingProvider inner)
+        : base(inner) { }
 
-    public ScopedEasyCachingProvider(
-        IEasyCachingProvider inner,
-        RequestCache         requestCache)
-        : base(inner)
-    {
-        _request = requestCache;
-    }
-
-    /* -------- intercept the three hot paths -------- */
+    /* ------------ intercept hot paths ------------ */
 
     public override async Task<CacheValue<T>> GetAsync<T>(
         string key,
         CancellationToken token = default)
     {
-        if (_request.TryGet<T>(key, out var local))
+        if (AmbientRequestCache.TryGet<T>(key, out var local))
             return new CacheValue<T>(local, true);
 
         var remote = await base.GetAsync<T>(key, token);
         if (remote.HasValue)
-            _request.Set(key, remote.Value!);
+            AmbientRequestCache.Set(key, remote.Value!);
 
         return remote;
     }
-
 
     public override async Task<CacheValue<T>> GetAsync<T>(
         string            key,
@@ -170,16 +76,15 @@ public sealed class ScopedEasyCachingProvider : DelegatingEasyCachingProvider
         TimeSpan?         expiration   = null,
         CancellationToken token        = default)
     {
-        if (_request.TryGet<T>(key, out var local))
+        if (AmbientRequestCache.TryGet<T>(key, out var local))
             return new CacheValue<T>(local, true);
 
         var remote = await base.GetAsync(key, factory, expiration, token);
         if (remote.HasValue)
-            _request.Set(key, remote.Value!);
+            AmbientRequestCache.Set(key, remote.Value!);
 
         return remote;
     }
-
 
     public override Task SetAsync<T>(
         string            key,
@@ -187,74 +92,48 @@ public sealed class ScopedEasyCachingProvider : DelegatingEasyCachingProvider
         TimeSpan?         expiration   = null,
         CancellationToken token        = default)
     {
-        _request.Set(key, value);            // keep request cache in sync
+        AmbientRequestCache.Set(key, value);
         return base.SetAsync(key, value, expiration, token);
     }
 }
+DelegatingEasyCachingProvider is the small pass‑through base from the previous
+message (no changes).
 
-3  Single extension to wire everything up
+3  Clear the ambient cache at the start / end of every request
 csharp
 Копировать
 Редактировать
-// CachingSetup.cs
-using EasyCaching.Core;
-using EasyCaching.InMemory;
-using EasyCaching.Redis;
-using Microsoft.Extensions.DependencyInjection;
-using Serilog;
-
-public static class CachingSetup
+// in Program.cs or Startup.cs – BEFORE UseEndpoints / MapControllers
+app.Use(async (ctx, next) =>
 {
-    /// <summary>
-    /// Registers EasyCaching (Redis + in‑proc) **and** the request‑scoped decorator
-    /// that prevents redundant Redis calls in the same request.
-    /// </summary>
-    public static void ConfigureCaching(
-        this IServiceCollection services,
-        RedisConfiguration?     cacheCfg,
-        ILogger                 logger)
+    AmbientRequestCache.Clear();   // fresh dictionary
+    await next();
+    AmbientRequestCache.Clear();   // don’t leak between requests
+});
+For a queue/Bus handler, wrap the invocation similarly.
+
+4  DI registration (all providers remain singleton → factory happy)
+csharp
+Копировать
+Редактировать
+services.AddEasyCaching(opts =>
+{
+    opts.WithJson();
+    opts.UseInMemory("MemCache");
+
+    opts.UseRedis(r =>
     {
-        cacheCfg ??= new RedisConfiguration();
-        services.AddSingleton(cacheCfg);
+        r.DBConfig.Endpoints.Add(new ServerEndPoint(cfg.Host, cfg.Port.Value));
+        r.DBConfig.Password = cfg.Password;
+        r.DBConfig.IsSsl    = cfg.IsSsl;
+        r.SerializerName    = "json";
+    }, "redis");
+});
 
-        /* 1️⃣  request‑scoped dictionary */
-        services.AddScoped<RequestCache>();
-
-        /* 2️⃣  normal EasyCaching registration */
-        services.AddEasyCaching(opts =>
-        {
-            logger.Information("Configuring EasyCaching …");
-
-            opts.WithJson();                 // System.Text.Json (faster)
-            opts.UseInMemory("MemCache");    // fallback in‑proc cache
-
-            if (!string.IsNullOrWhiteSpace(cacheCfg.Host) && cacheCfg.Port is not null)
-            {
-                opts.UseRedis(redis =>
-                {
-                    redis.DBConfig.Endpoints.Add(
-                        new ServerEndPoint(cacheCfg.Host, cacheCfg.Port.Value));
-
-                    if (!string.IsNullOrWhiteSpace(cacheCfg.Password))
-                        redis.DBConfig.Password = cacheCfg.Password;
-
-                    redis.DBConfig.IsSsl   = cacheCfg.IsSsl;
-                    redis.SerializerName   = "json";
-                }, "redis");                 // ← give this provider the name \"redis\"
-            }
-            else
-            {
-                logger.Information(\"Redis host empty – using in‑memory provider only\");
-            }
-        });
-
-        /* 3️⃣  when anything asks for IEasyCachingProvider, give them the wrapper   */
-        services.AddScoped<IEasyCachingProvider>(sp =>
-        {
-            var factory  = sp.GetRequiredService<IEasyCachingProviderFactory>();
-            var redis    = factory.GetCachingProvider(\"redis\");   // original provider
-            var reqCache = sp.GetRequiredService<RequestCache>();  // per‑request dict
-            return new ScopedEasyCachingProvider(redis, reqCache); // wrapped version
-        });
-    }
-}
+/* Replace *default* provider with our singleton decorator */
+services.AddSingleton<IEasyCachingProvider>(sp =>
+{
+    var factory = sp.GetRequiredService<IEasyCachingProviderFactory>();
+    var redis   = factory.GetCachingProvider("redis");          // raw singleton
+    return new PerRequestEasyCachingProvider(redis);            // decorated singleton
+});
