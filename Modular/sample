@@ -1,4 +1,4 @@
-1  Request‑scoped dictionary
+1  Request‑scoped dictionary (lives exactly one DI scope)
 csharp
 Копировать
 Редактировать
@@ -8,7 +8,8 @@ using System.Collections.Generic;
 namespace YourApp.Caching;
 
 /// <summary>
-/// First‑level cache that lives only for the DI scope (one HTTP request / message).
+/// First‑level cache that survives only for the lifetime of the current
+/// dependency‑injection *scope* (e.g. one HTTP request or message).
 /// </summary>
 public sealed class RequestCache
 {
@@ -27,65 +28,85 @@ public sealed class RequestCache
 
     public void Set<T>(string key, T value) => _data[key] = value!;
 }
-2  Decorator that checks the scoped cache first
+2  Wrapper that checks the scoped cache first, then Redis
 csharp
 Копировать
 Редактировать
-// TwoLevelEasyCachingProvider.cs
+// ScopedEasyCachingProvider.cs
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using EasyCaching.Core;
+using EasyCaching.Core.Internal;   // ⚠️ brings in CachingProviderWrapperBase
 
 namespace YourApp.Caching;
 
 /// <summary>
-/// Wraps the real EasyCaching provider so Redis is hit at most once per key per request.
+/// Decorator: intercepts Get*/Set* calls so Redis is hit at most *once* per key
+/// per request.  Everything else is forwarded by the base class.
 /// </summary>
-public sealed class TwoLevelEasyCachingProvider : IEasyCachingProvider
+public sealed class ScopedEasyCachingProvider : CachingProviderWrapperBase
 {
-    private readonly IEasyCachingProvider _inner;
-    private readonly RequestCache         _request;
+    private readonly RequestCache _request;
 
-    public TwoLevelEasyCachingProvider(
-        IEasyCachingProvider inner,
-        RequestCache requestCache)
+    public ScopedEasyCachingProvider(
+        IEasyCachingProvider inner,      // real Redis provider
+        RequestCache         requestCache)
+        : base(inner)                    // base class wires all pass‑throughs
     {
-        _inner   = inner;
         _request = requestCache;
     }
 
-    public async Task<CacheValue<T>> GetAsync<T>(string key)
+    /* -------------------- overrides -------------------- */
+
+    public override async Task<CacheValue<T>> GetAsync<T>(
+        string key,
+        CancellationToken token = default)
     {
+        // 1️⃣  look in the per‑request dictionary
         if (_request.TryGet<T>(key, out var local))
             return new CacheValue<T>(local, true);
 
-        var remote = await _inner.GetAsync<T>(key);
+        // 2️⃣  miss → delegate to Redis
+        var remote = await base.GetAsync<T>(key, token);
+
+        // 3️⃣  populate request cache so the next call is in‑memory
         if (remote.HasValue)
             _request.Set(key, remote.Value!);
 
         return remote;
     }
 
-    public Task SetAsync<T>(string key, T value, TimeSpan? exp = null)
+    public override async Task<CacheValue<T>> GetAsync<T>(
+        string            key,
+        Func<Task<T>>     factory,
+        TimeSpan?         expiration   = null,
+        CancellationToken token        = default)
     {
-        _request.Set(key, value);
-        return _inner.SetAsync(key, value, exp);
+        if (_request.TryGet<T>(key, out var local))
+            return new CacheValue<T>(local, true);
+
+        var remote = await base.GetAsync(key, factory, expiration, token);
+        if (remote.HasValue)
+            _request.Set(key, remote.Value!);
+
+        return remote;
     }
 
-    // ---- pass‑throughs for sync API & misc members ----
-    public CacheValue<T> Get<T>(string key)                        => _inner.Get<T>(key);
-    public void          Set<T>(string key, T value, TimeSpan? e)  => _inner.Set(key, value, e);
-    public bool          Exists(string key)                        => _inner.Exists(key);
-    public Task<bool>    ExistsAsync(string key)                   => _inner.ExistsAsync(key);
-    public void          Remove(string key)                        => _inner.Remove(key);
-    public Task<bool>    RemoveAsync(string key)                   => _inner.RemoveAsync(key);
-    public void          Flush()                                   => _inner.Flush();
-    public Task          FlushAsync()                              => _inner.FlushAsync();
-    public int           MaxRdSecond                               => _inner.MaxRdSecond;
-    public int           Order                                    => _inner.Order;
-    public string        Name                                     => _inner.Name;
+    public override Task SetAsync<T>(
+        string            key,
+        T                 value,
+        TimeSpan?         expiration   = null,
+        CancellationToken token        = default)
+    {
+        _request.Set(key, value);            // keep request‑scope in sync
+        return base.SetAsync(key, value, expiration, token);
+    }
 }
-3  Clean ConfigureCaching extension
+CachingProviderWrapperBase already implements every other interface member by
+forwarding it to the inner provider, so we only override what we care about.
+
+3  Single extension to wire everything up
 csharp
 Копировать
 Редактировать
@@ -98,6 +119,10 @@ using Serilog;
 
 public static class CachingSetup
 {
+    /// <summary>
+    /// Registers EasyCaching (Redis + in‑proc) **and** the request‑scoped decorator
+    /// that prevents redundant Redis calls in the same request.
+    /// </summary>
     public static void ConfigureCaching(
         this IServiceCollection services,
         RedisConfiguration?     cacheCfg,
@@ -106,15 +131,16 @@ public static class CachingSetup
         cacheCfg ??= new RedisConfiguration();
         services.AddSingleton(cacheCfg);
 
-        // 1️⃣  request‑scoped dictionary
+        /* 1️⃣  request‑scoped dictionary */
         services.AddScoped<RequestCache>();
 
-        // 2️⃣  vanilla EasyCaching registration (exactly as before)
+        /* 2️⃣  normal EasyCaching registration */
         services.AddEasyCaching(opts =>
         {
-            logger.Information("Configuring caching");
-            opts.WithJson();                       // System.Text.Json
-            opts.UseInMemory("MemCache");          // always have an in‑proc fallback
+            logger.Information("Configuring EasyCaching …");
+
+            opts.WithJson();                 // System.Text.Json (faster)
+            opts.UseInMemory("MemCache");    // fallback in‑proc cache
 
             if (!string.IsNullOrWhiteSpace(cacheCfg.Host) && cacheCfg.Port is not null)
             {
@@ -126,23 +152,23 @@ public static class CachingSetup
                     if (!string.IsNullOrWhiteSpace(cacheCfg.Password))
                         redis.DBConfig.Password = cacheCfg.Password;
 
-                    redis.DBConfig.IsSsl     = cacheCfg.IsSsl;
-                    redis.SerializerName     = "json";
-                }, "redis");
+                    redis.DBConfig.IsSsl   = cacheCfg.IsSsl;
+                    redis.SerializerName   = "json";
+                }, "redis");                 // ← give this provider the name \"redis\"
             }
             else
             {
-                logger.Information("Redis host empty → using only in‑memory cache");
+                logger.Information(\"Redis host empty – using in‑memory provider only\");
             }
         });
 
-        // 3️⃣  decorate the named \"redis\" provider with the scoped façade
+        /* 3️⃣  when anything asks for IEasyCachingProvider, give them the wrapper   */
         services.AddScoped<IEasyCachingProvider>(sp =>
         {
             var factory  = sp.GetRequiredService<IEasyCachingProviderFactory>();
-            var redis    = factory.GetCachingProvider("redis");      // raw provider
-            var reqCache = sp.GetRequiredService<RequestCache>();    // scoped store
-            return new TwoLevelEasyCachingProvider(redis, reqCache);
+            var redis    = factory.GetCachingProvider(\"redis\");   // original provider
+            var reqCache = sp.GetRequiredService<RequestCache>();  // per‑request dict
+            return new ScopedEasyCachingProvider(redis, reqCache); // wrapped version
         });
     }
 }
