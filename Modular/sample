@@ -1,66 +1,46 @@
-using System;
-using System.Threading;
-using System.Threading.Channels;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-
-public class ChannelConsumerService : BackgroundService
-{
-    private readonly Channel<string> _channel;
-    private readonly ILogger<ChannelConsumerService> _logger;
-
-    public ChannelConsumerService(Channel<string> channel, ILogger<ChannelConsumerService> logger)
-    {
-        _channel = channel;
-        _logger = logger;
-    }
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("ChannelConsumerService started");
+        _logger.LogInformation("Batch consumer started");
 
-        while (!stoppingToken.IsCancellationRequested)
+        var buffer = new List<string>(BatchSize);
+        var timer = new PeriodicTimer(FlushInterval);
+
+        try
         {
-            while (_channel.Reader.TryRead(out var message))
+            while (!stoppingToken.IsCancellationRequested)
             {
-                try
+                // Non-blocking read loop until flush interval
+                while (_channel.Reader.TryRead(out var message))
                 {
-                    // Simulate processing
-                    _logger.LogInformation("Processing: {Message}", message);
-                    await Task.Delay(100, stoppingToken); // simulate work
+                    buffer.Add(message);
+
+                    if (buffer.Count >= BatchSize)
+                        break;
                 }
-                catch (Exception ex)
+
+                // Wait for flush interval or cancellation
+                await timer.WaitForNextTickAsync(stoppingToken);
+
+                if (buffer.Count > 0)
                 {
-                    _logger.LogError(ex, "Error processing message");
+                    await ProcessBatchAsync(buffer, stoppingToken);
+                    buffer.Clear();
                 }
             }
-
-            // Wait before checking again
-            await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
         }
-
-        _logger.LogInformation("ChannelConsumerService stopped");
-    }
-}
-
-
-public class TestProducerService : BackgroundService
-{
-    private readonly Channel<string> _channel;
-
-    public TestProducerService(Channel<string> channel)
-    {
-        _channel = channel;
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        int counter = 0;
-        while (!stoppingToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            await _channel.Writer.WriteAsync($"Message {++counter}", stoppingToken);
-            await Task.Delay(500, stoppingToken); // simulate burst
+            _logger.LogInformation("Batch consumer stopping...");
         }
     }
-}
+
+    private Task ProcessBatchAsync(List<string> batch, CancellationToken token)
+    {
+        // Simulate sending downstream
+        _logger.LogInformation("Sending batch: {Count} items", batch.Count);
+        foreach (var item in batch)
+        {
+            _logger.LogInformation(" → {Item}", item);
+        }
+        return Task.CompletedTask;
+    }
