@@ -1,268 +1,66 @@
-1  Ambient request buffer
-csharp
-Копировать
-Редактировать
-// AmbientRequestCache.cs
-using System.Collections.Generic;
-using System.Threading;
-
-namespace YourApp.Caching;
-
-/// <summary>
-/// Holds a per‑async‑flow (per HTTP request / message) dictionary.
-/// </summary>
-public static class AmbientRequestCache
-{
-    private static readonly AsyncLocal<Dictionary<string, object>> _state = new();
-
-    private static Dictionary<string, object> State
-        => _state.Value ??= new Dictionary<string, object>();
-
-    public static bool TryGet<T>(string key, out T value)
-    {
-        if (State.TryGetValue(key, out var o) && o is T t)
-        {
-            value = t;
-            return true;
-        }
-        value = default!;
-        return false;
-    }
-
-    public static void Set<T>(string key, T value) => State[key] = value!;
-
-    public static void Clear() => State.Clear();
-}
-2  Singleton wrapper that uses the ambient buffer
-csharp
-Копировать
-Редактировать
-// PerRequestEasyCachingProvider.cs
 using System;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
-using EasyCaching.Core;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
-namespace YourApp.Caching;
-
-/// <summary>
-/// Singleton decorator: ensures one Redis round‑trip per key per request
-/// by using an AsyncLocal dictionary.
-/// </summary>
-public sealed class PerRequestEasyCachingProvider : DelegatingEasyCachingProvider
+public class ChannelConsumerService : BackgroundService
 {
-    public PerRequestEasyCachingProvider(IEasyCachingProvider inner)
-        : base(inner) { }
+    private readonly Channel<string> _channel;
+    private readonly ILogger<ChannelConsumerService> _logger;
 
-    /* ------------ intercept hot paths ------------ */
-
-    public override async Task<CacheValue<T>> GetAsync<T>(
-        string key,
-        CancellationToken token = default)
+    public ChannelConsumerService(Channel<string> channel, ILogger<ChannelConsumerService> logger)
     {
-        if (AmbientRequestCache.TryGet<T>(key, out var local))
-            return new CacheValue<T>(local, true);
-
-        var remote = await base.GetAsync<T>(key, token);
-        if (remote.HasValue)
-            AmbientRequestCache.Set(key, remote.Value!);
-
-        return remote;
+        _channel = channel;
+        _logger = logger;
     }
 
-    public override async Task<CacheValue<T>> GetAsync<T>(
-        string            key,
-        Func<Task<T>>     factory,
-        TimeSpan?         expiration   = null,
-        CancellationToken token        = default)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (AmbientRequestCache.TryGet<T>(key, out var local))
-            return new CacheValue<T>(local, true);
+        _logger.LogInformation("ChannelConsumerService started");
 
-        var remote = await base.GetAsync(key, factory, expiration, token);
-        if (remote.HasValue)
-            AmbientRequestCache.Set(key, remote.Value!);
-
-        return remote;
-    }
-
-    public override Task SetAsync<T>(
-        string            key,
-        T                 value,
-        TimeSpan?         expiration   = null,
-        CancellationToken token        = default)
-    {
-        AmbientRequestCache.Set(key, value);
-        return base.SetAsync(key, value, expiration, token);
-    }
-}
-DelegatingEasyCachingProvider is the small pass‑through base from the previous
-message (no changes).
-
-3  Clear the ambient cache at the start / end of every request
-csharp
-Копировать
-Редактировать
-// in Program.cs or Startup.cs – BEFORE UseEndpoints / MapControllers
-app.Use(async (ctx, next) =>
-{
-    AmbientRequestCache.Clear();   // fresh dictionary
-    await next();
-    AmbientRequestCache.Clear();   // don’t leak between requests
-});
-For a queue/Bus handler, wrap the invocation similarly.
-
-4  DI registration (all providers remain singleton → factory happy)
-csharp
-Копировать
-Редактировать
-services.AddEasyCaching(opts =>
-{
-    opts.WithJson();
-    opts.UseInMemory("MemCache");
-
-    opts.UseRedis(r =>
-    {
-        r.DBConfig.Endpoints.Add(new ServerEndPoint(cfg.Host, cfg.Port.Value));
-        r.DBConfig.Password = cfg.Password;
-        r.DBConfig.IsSsl    = cfg.IsSsl;
-        r.SerializerName    = "json";
-    }, "redis");
-});
-
-/* Replace *default* provider with our singleton decorator */
-services.AddSingleton<IEasyCachingProvider>(sp =>
-{
-    var factory = sp.GetRequiredService<IEasyCachingProviderFactory>();
-    var redis   = factory.GetCachingProvider("redis");          // raw singleton
-    return new PerRequestEasyCachingProvider(redis);            // decorated singleton
-});
-
-
-
-=============
-
-namespace YourApp.Caching;
-
-public class CacheSettings
-{
-    /// <summary>
-    /// Keys that start with one of these prefixes are cached in IMemoryCache
-    /// for <see cref="StaticTtl"/> (default: 10 min) in addition to the
-    /// per‑request AsyncLocal layer.
-    /// </summary>
-    public string[] StaticKeyPrefixes { get; init; } = Array.Empty<string>();
-
-    public TimeSpan StaticTtl { get; init; } = TimeSpan.FromMinutes(10);
-}
-appsettings.json
-
-json
-Копировать
-Редактировать
-{
-  "CacheSettings": {
-    "StaticKeyPrefixes": [ "countries:", "lookups:", "config:" ],
-    "StaticTtl": "00:10:00"
-  }
-}
-2  Decorator with three tiers
-(AsyncLocal → IMemoryCache → Redis)
-
-csharp
-Копировать
-Редактировать
-// TieredEasyCachingProvider.cs
-using System;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using EasyCaching.Core;
-using Microsoft.Extensions.Caching.Memory;
-using Microsoft.Extensions.Options;
-
-namespace YourApp.Caching;
-
-public sealed class TieredEasyCachingProvider : DelegatingEasyCachingProvider
-{
-    private readonly IMemoryCache                     _staticCache;
-    private readonly CacheSettings                    _cfg;
-    private readonly string[]                         _prefixes;
-
-    public TieredEasyCachingProvider(
-        IEasyCachingProvider  inner,
-        IMemoryCache          staticCache,
-        IOptions<CacheSettings> options)
-        : base(inner)
-    {
-        _staticCache = staticCache;
-        _cfg         = options.Value;
-        _prefixes    = _cfg.StaticKeyPrefixes;
-    }
-
-    private bool IsStatic(string key) =>
-        _prefixes.Any(p => key.StartsWith(p, StringComparison.Ordinal));
-
-    /* ───── GET (async) ───── */
-
-    public override async Task<CacheValue<T>> GetAsync<T>(
-        string key, CancellationToken tk = default)
-    {
-        // 1) per‑request
-        if (AmbientRequestCache.TryGet<T>(key, out var reqVal))
-            return new CacheValue<T>(reqVal, true);
-
-        // 2) 10‑min in‑proc layer (only for static keys)
-        if (IsStatic(key) && _staticCache.TryGetValue<T>(key, out var staticVal))
+        while (!stoppingToken.IsCancellationRequested)
         {
-            AmbientRequestCache.Set(key, staticVal);
-            return new CacheValue<T>(staticVal, true);
-        }
-
-        // 3) fall back to Redis
-        var remote = await base.GetAsync<T>(key, tk);
-        if (remote.HasValue)
-        {
-            AmbientRequestCache.Set(key, remote.Value!);
-
-            if (IsStatic(key))
-                _staticCache.Set(key, remote.Value!,
-                    new MemoryCacheEntryOptions
-                    {
-                        AbsoluteExpirationRelativeToNow = _cfg.StaticTtl
-                    });
-        }
-        return remote;
-    }
-
-    /* ───── SET (async) ───── */
-
-    public override Task SetAsync<T>(
-        string key, T value, TimeSpan? exp = null, CancellationToken tk = default)
-    {
-        AmbientRequestCache.Set(key, value);
-
-        if (IsStatic(key))
-            _staticCache.Set(key, value,
-                new MemoryCacheEntryOptions
+            while (_channel.Reader.TryRead(out var message))
+            {
+                try
                 {
-                    AbsoluteExpirationRelativeToNow = _cfg.StaticTtl
-                });
+                    // Simulate processing
+                    _logger.LogInformation("Processing: {Message}", message);
+                    await Task.Delay(100, stoppingToken); // simulate work
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error processing message");
+                }
+            }
 
-        return base.SetAsync(key, value, exp, tk);
+            // Wait before checking again
+            await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
+        }
+
+        _logger.LogInformation("ChannelConsumerService stopped");
     }
 }
-Note Only three overrides (GetAsync ×2 and SetAsync) changed; all
-other members still pass straight through the base class.
 
-3  DI wiring (Scrutor)
-csharp
-Копировать
-Редактировать
-// Program.cs or Startup.cs
-builder.Services.Configure<CacheSettings>(
-    builder.Configuration.GetSection("CacheSettings"));
 
-builder.Services.AddMemoryCache();  // singleton IMemoryCache
+public class TestProducerService : BackgroundService
+{
+    private readonly Channel<string> _channel;
 
-builder.Services.Decorate<IEasyCachingProvider, TieredEasyCachingProvider>();
+    public TestProducerService(Channel<string> channel)
+    {
+        _channel = channel;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        int counter = 0;
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await _channel.Writer.WriteAsync($"Message {++counter}", stoppingToken);
+            await Task.Delay(500, stoppingToken); // simulate burst
+        }
+    }
+}
