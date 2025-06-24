@@ -1,46 +1,8 @@
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        _logger.LogInformation("Batch consumer started");
-
-        var buffer = new List<string>(BatchSize);
-        var timer = new PeriodicTimer(FlushInterval);
-
-        try
-        {
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                // Non-blocking read loop until flush interval
-                while (_channel.Reader.TryRead(out var message))
-                {
-                    buffer.Add(message);
-
-                    if (buffer.Count >= BatchSize)
-                        break;
-                }
-
-                // Wait for flush interval or cancellation
-                await timer.WaitForNextTickAsync(stoppingToken);
-
-                if (buffer.Count > 0)
-                {
-                    await ProcessBatchAsync(buffer, stoppingToken);
-                    buffer.Clear();
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogInformation("Batch consumer stopping...");
-        }
+SELECT
+    VALUE {
+        "minTimestamp": MIN(c._ts),
+        "maxTimestamp": MAX(c._ts),
+        "totalOrders": COUNT(1),
+        "ordersPerSecond": COUNT(1) * 1.0 / (MAX(c._ts) - MIN(c._ts))
     }
-
-    private Task ProcessBatchAsync(List<string> batch, CancellationToken token)
-    {
-        // Simulate sending downstream
-        _logger.LogInformation("Sending batch: {Count} items", batch.Count);
-        foreach (var item in batch)
-        {
-            _logger.LogInformation(" → {Item}", item);
-        }
-        return Task.CompletedTask;
-    }
+FROM c
