@@ -1,8 +1,23 @@
-SELECT
-    VALUE {
-        "minTimestamp": MIN(c._ts),
-        "maxTimestamp": MAX(c._ts),
-        "totalOrders": COUNT(1),
-        "ordersPerSecond": COUNT(1) * 1.0 / (MAX(c._ts) - MIN(c._ts))
-    }
-FROM c
+public async Task<long> RunLuaAsync(string key, int delta, int max)
+{
+    var db = await _redisDbProvider.GetDatabaseAsync();
+
+    var script = @"local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local delta = tonumber(ARGV[1])
+local max = tonumber(ARGV[2])
+local new = current + delta
+if new > max then
+    return {err = 'LIMIT_EXCEEDED_MAX'}
+end
+redis.call('SET', KEYS[1], new)
+return new";
+
+    var result = await db.ScriptEvaluateAsync(script,
+        new RedisKey[] { key },
+        new RedisValue[] { delta, max });
+
+    if (result.Type == ResultType.Error)
+        throw new Exception($"Redis script error: {result}");
+
+    return (long)result;
+}
