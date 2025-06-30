@@ -1,23 +1,111 @@
-public async Task<long> RunLuaAsync(string key, int delta, int max)
-{
-    var db = await _redisDbProvider.GetDatabaseAsync();
 
-    var script = @"local current = tonumber(redis.call('GET', KEYS[1]) or '0')
-local delta = tonumber(ARGV[1])
-local max = tonumber(ARGV[2])
+Lua script (unchanged except for the name of the 4th arg)
+lua
+Копировать
+Редактировать
+-- KEYS[1]   counter key
+-- ARGV[1]   delta            (decimal string)
+-- ARGV[2]   max              (decimal string)
+-- ARGV[3]   dbVal            ("" when unknown)
+-- ARGV[4]   expAtMs          (absolute expire‑at timestamp, epoch ms UTC)
+
+local delta  = tonumber(ARGV[1])
+local max    = tonumber(ARGV[2])
+local dbVal  = ARGV[3]
+local expAt  = tonumber(ARGV[4])
+
+local current = redis.call('GET', KEYS[1])
+
+if not current then
+  if dbVal == '' then
+    return {err = 'NEED_DB_BASELINE'}
+  end
+  -- first writer initialises key and attaches the absolute expiry
+  if redis.call('SETNX', KEYS[1], dbVal) == 1 then
+    redis.call('PEXPIREAT', KEYS[1], expAt)
+  end
+  current = tonumber(redis.call('GET', KEYS[1]))
+else
+  current = tonumber(current)
+end
+
 local new = current + delta
 if new > max then
-    return {err = 'LIMIT_EXCEEDED_MAX'}
+  return {err = 'LIMIT_EXCEEDED'}
 end
-redis.call('SET', KEYS[1], new)
-return new";
 
-    var result = await db.ScriptEvaluateAsync(script,
+redis.call('SET', KEYS[1], tostring(new))
+return tostring(new)
+C# helper
+csharp
+Копировать
+Редактировать
+private static long ToEpochMillisecondsUtc(DateTime utc)
+{
+    // safeguard: ensure the input really *is* UTC
+    if (utc.Kind != DateTimeKind.Utc)
+        utc = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+
+    return new DateTimeOffset(utc).ToUnixTimeMilliseconds();
+}
+Updated method signature & call
+csharp
+Копировать
+Редактировать
+public async Task<decimal> UpdateOrderSumAsync(
+    string          key,
+    decimal         delta,
+    decimal         max,
+    decimal?        dbBaseline,
+    DateTime        expireAtUtc)          // <-- absolute cut‑off in UTC
+{
+    var inv = CultureInfo.InvariantCulture;
+
+    var result = (RedisResult)await _redis.ScriptEvaluateAsync(
+        _orderSumScript,                                  // the Lua string above
         new RedisKey[] { key },
-        new RedisValue[] { delta, max });
+        new RedisValue[]
+        {
+            delta.ToString("G", inv),
+            max.ToString("G", inv),
+            dbBaseline.HasValue ? dbBaseline.Value.ToString("G", inv) : "",
+            ToEpochMillisecondsUtc(expireAtUtc)
+        });
 
     if (result.Type == ResultType.Error)
-        throw new Exception($"Redis script error: {result}");
+    {
+        var err = (string)result;
+        switch (err)
+        {
+            case "NEED_DB_BASELINE":
+                throw new InvalidOperationException("Fetch baseline from SQL and retry.");
+            case "LIMIT_EXCEEDED":
+                throw new InvalidOperationException("Client limit exceeded.");
+            default:
+                throw new Exception($"Redis script error: {err}");
+        }
+    }
 
-    return (long)result;
+    return decimal.Parse((string)result, inv);
 }
+How you’d call it
+csharp
+Копировать
+Редактировать
+var cutOffUtc = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month,
+                             DateTime.UtcNow.Day, 23, 59, 0, DateTimeKind.Utc);
+
+// or, if it’s already tomorrow in your business logic:
+var cutOffUtc = nextBusinessDayEndUtc;
+
+await UpdateOrderSumAsync(
+    key:        $"client:{clientId}:orderSum",
+    delta:      orderValue,
+    max:        clientLimit,
+    dbBaseline: null,          // first attempt
+    expireAtUtc: cutOffUtc);
+The very first script that creates the key sets PEXPIREAT key expAtMs, anchoring expiration to that absolute UTC instant.
+
+All later increments skip the expiry call, leaving the cut‑off untouched.
+
+Whether cutOffUtc is today or tomorrow (or any future date) makes no difference—Redis will delete the key precisely at that instant.
