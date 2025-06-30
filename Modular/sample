@@ -1,41 +1,3 @@
-
-Lua script (unchanged except for the name of the 4th arg)
-lua
-Копировать
-Редактировать
--- KEYS[1]   counter key
--- ARGV[1]   delta            (decimal string)
--- ARGV[2]   max              (decimal string)
--- ARGV[3]   dbVal            ("" when unknown)
--- ARGV[4]   expAtMs          (absolute expire‑at timestamp, epoch ms UTC)
-
-local delta  = tonumber(ARGV[1])
-local max    = tonumber(ARGV[2])
-local dbVal  = ARGV[3]
-local expAt  = tonumber(ARGV[4])
-
-local current = redis.call('GET', KEYS[1])
-
-if not current then
-  if dbVal == '' then
-    return {err = 'NEED_DB_BASELINE'}
-  end
-  -- first writer initialises key and attaches the absolute expiry
-  if redis.call('SETNX', KEYS[1], dbVal) == 1 then
-    redis.call('PEXPIREAT', KEYS[1], expAt)
-  end
-  current = tonumber(redis.call('GET', KEYS[1]))
-else
-  current = tonumber(current)
-end
-
-local new = current + delta
-if new > max then
-  return {err = 'LIMIT_EXCEEDED'}
-end
-
-redis.call('SET', KEYS[1], tostring(new))
-return tostring(new)
 C# helper
 csharp
 Копировать
@@ -109,3 +71,43 @@ The very first script that creates the key sets PEXPIREAT key expAtMs, anchoring
 All later increments skip the expiry call, leaving the cut‑off untouched.
 
 Whether cutOffUtc is today or tomorrow (or any future date) makes no difference—Redis will delete the key precisely at that instant.
+
+
+Думал на протяжении 12 секунд
+Here’s the exact Lua body wrapped in a C# verbatim string, formatted the same way you had it earlier:
+
+csharp
+Копировать
+Редактировать
+var script = @"
+local delta  = tonumber(ARGV[1])
+local max    = tonumber(ARGV[2])
+local dbVal  = ARGV[3]               -- "" when unknown
+local expAt  = tonumber(ARGV[4])     -- absolute expire‑at (epoch ms)
+
+local current = redis.call('GET', KEYS[1])
+
+if not current then
+  if dbVal == '' then
+    return {err = 'NEED_DB_BASELINE'}
+  end
+
+  -- first writer initialises key and attaches the absolute expiry
+  if redis.call('SETNX', KEYS[1], dbVal) == 1 then
+    redis.call('PEXPIREAT', KEYS[1], expAt)
+  end
+
+  current = tonumber(redis.call('GET', KEYS[1]))
+else
+  current = tonumber(current)
+end
+
+local new = current + delta
+if new > max then
+  return {err = 'LIMIT_EXCEEDED'}
+end
+
+redis.call('SET', KEYS[1], tostring(new))
+return tostring(new)
+";
+Just drop this script string into your existing ScriptEvaluateAsync call—everything else in your code can stay exactly as it is.
