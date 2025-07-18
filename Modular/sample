@@ -1,36 +1,58 @@
-local currentLenderValue = redis.call('GET', keyLender)
-local currentBorrowerValue = redis.call('GET', keyBorrower)
+public static class LuaScriptRegistry
+{
+    private static IConnectionMultiplexer? _redisMux;
+    private static readonly ConcurrentDictionary<string, Lazy<Task<RedisScript>>> _scripts = new();
 
--- Check for baseline requirement early and efficiently
-if not currentLenderValue or not currentBorrowerValue or dbValLender == '' or dbValBorrower == '' then
-    return '{RedisResponses.NeedDbBaseLine}'
-end
+    private static bool _initialized = false;
+    private static readonly object _lock = new();
 
--- Initialize keys with expiration atomically only if they don't exist
-if redis.call('SET', keyLender, dbValLender, 'PX', expAtLender, 'NX') then
-    currentLenderValue = dbValLender
-end
+    public static void Initialize(IConnectionMultiplexer redisMux)
+    {
+        if (_initialized) return;
 
-if redis.call('SET', keyBorrower, dbValBorrower, 'PX', expAtBorrower, 'NX') then
-    currentBorrowerValue = dbValBorrower
-end
+        lock (_lock)
+        {
+            if (_initialized) return;
 
-currentLenderValue = tonumber(currentLenderValue)
-currentBorrowerValue = tonumber(currentBorrowerValue)
+            _redisMux = redisMux;
 
-local newLenderValue = currentLenderValue + deltaLender
-if newLenderValue > maxLender then
-    return '{RedisResponses.LimitExceededLender}'
-end
+            _scripts.TryAdd("ValidateMatchingTotals", new Lazy<Task<RedisScript>>(() => LoadScriptAsync(
+                key: "ValidateMatchingTotals",
+                script: $@"
+                    local deltaLender = tonumber(ARGV[1])
+                    -- your full Lua logic here
+                    return {{tostring(deltaLender)}}
+                "), LazyThreadSafetyMode.ExecutionAndPublication));
 
-local newBorrowerValue = currentBorrowerValue + deltaBorrower
-if newBorrowerValue > maxBorrower then
-    return '{RedisResponses.LimitExceededBorrower}'
-end
+            // Add more scripts here if needed...
 
--- Use pipeline-friendly multi-key set if applicable
-redis.call('MSET', keyLender, tostring(newLenderValue), keyBorrower, tostring(newBorrowerValue))
-redis.call('PEXPIRE', keyLender, redis.call('PTTL', keyLender))
-redis.call('PEXPIRE', keyBorrower, redis.call('PTTL', keyBorrower))
+            _initialized = true;
+        }
+    }
 
-return {tostring(newLenderValue), tostring(newBorrowerValue)}
+    private static async Task<RedisScript> LoadScriptAsync(string key, string script)
+    {
+        if (_redisMux == null)
+            throw new InvalidOperationException("LuaScriptRegistry not initialized. Call Initialize() with IConnectionMultiplexer first.");
+
+        var db = _redisMux.GetDatabase();
+        var sha = await db.ScriptLoadAsync(script);
+        return new RedisScript(script, sha);
+    }
+
+    public static Task<RedisScript> GetAsync(string key)
+    {
+        if (!_initialized)
+            throw new InvalidOperationException("LuaScriptRegistry not initialized.");
+
+        if (_scripts.TryGetValue(key, out var lazyScript))
+            return lazyScript.Value;
+
+        throw new KeyNotFoundException($"Lua script '{key}' not registered.");
+    }
+
+    // Optional: preload all scripts (only if you really want eager loading)
+    public static Task WarmUpAsync() => Task.WhenAll(_scripts.Values.Select(s => s.Value));
+}
+
+public record RedisScript(string Script, RedisResult Sha);
