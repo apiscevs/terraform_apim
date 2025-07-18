@@ -1,22 +1,36 @@
-private static string CacheKey(
-    string partyPlatformId,
-    string? dtccNumber,
-    string? securityId,
-    IEnumerable<MarketDestination> markets,
-    string? securityCurrency,
-    string? fileMetadataId,
-    int? entityRowNumber)
-{
-    // Canonicalise the markets list so different caller orders produce the same key
-    var marketsKey = string.Join(',',
-                     markets.OrderBy(m => m.Id));   // or .Code / .Name
+local currentLenderValue = redis.call('GET', keyLender)
+local currentBorrowerValue = redis.call('GET', keyBorrower)
 
-    return string.Join('|',                         // choose one separator
-        partyPlatformId,
-        dtccNumber        ?? "-",
-        securityId        ?? "-",
-        marketsKey        == "" ? "-" : marketsKey,
-        securityCurrency  ?? "-",
-        fileMetadataId    ?? "-",
-        entityRowNumber?.ToString(CultureInfo.InvariantCulture) ?? "-");
-}
+-- Check for baseline requirement early and efficiently
+if not currentLenderValue or not currentBorrowerValue or dbValLender == '' or dbValBorrower == '' then
+    return '{RedisResponses.NeedDbBaseLine}'
+end
+
+-- Initialize keys with expiration atomically only if they don't exist
+if redis.call('SET', keyLender, dbValLender, 'PX', expAtLender, 'NX') then
+    currentLenderValue = dbValLender
+end
+
+if redis.call('SET', keyBorrower, dbValBorrower, 'PX', expAtBorrower, 'NX') then
+    currentBorrowerValue = dbValBorrower
+end
+
+currentLenderValue = tonumber(currentLenderValue)
+currentBorrowerValue = tonumber(currentBorrowerValue)
+
+local newLenderValue = currentLenderValue + deltaLender
+if newLenderValue > maxLender then
+    return '{RedisResponses.LimitExceededLender}'
+end
+
+local newBorrowerValue = currentBorrowerValue + deltaBorrower
+if newBorrowerValue > maxBorrower then
+    return '{RedisResponses.LimitExceededBorrower}'
+end
+
+-- Use pipeline-friendly multi-key set if applicable
+redis.call('MSET', keyLender, tostring(newLenderValue), keyBorrower, tostring(newBorrowerValue))
+redis.call('PEXPIRE', keyLender, redis.call('PTTL', keyLender))
+redis.call('PEXPIRE', keyBorrower, redis.call('PTTL', keyBorrower))
+
+return {tostring(newLenderValue), tostring(newBorrowerValue)}
