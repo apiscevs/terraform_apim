@@ -1,55 +1,72 @@
-public static class LuaScriptRegistry
+public interface IRedisScriptManager
 {
-    private static IConnectionMultiplexer? _redisMux;
-    private static readonly ConcurrentDictionary<string, AsyncLazy<RedisScript>> _scripts = new();
-    private static bool _initialized = false;
-    private static readonly object _lock = new();
+    Task<LoadedLuaScript> GetOrLoadAsync(string script);
+}
 
-    public static void Initialize(IConnectionMultiplexer redisMux)
+public class RedisScriptManager : IRedisScriptManager
+{
+    private readonly IConnectionMultiplexer _redis;
+    private readonly ConcurrentDictionary<string, Lazy<Task<LoadedLuaScript>>> _loadedScripts 
+        = new ConcurrentDictionary<string, Lazy<Task<LoadedLuaScript>>>();
+
+    public RedisScriptManager(IConnectionMultiplexer redis)
     {
-        if (_initialized) return;
+        _redis = redis;
+    }
 
-        lock (_lock)
+    public Task<LoadedLuaScript> GetOrLoadAsync(string script)
+    {
+        var lazyLoadedScript = _loadedScripts.GetOrAdd(script, s => new Lazy<Task<LoadedLuaScript>>(async () =>
         {
-            if (_initialized) return;
+            var prepared = LuaScript.Prepare(script);
+            var loaded = await prepared.LoadAsync(_redis.GetServer(_redis.GetEndPoints()[0]));
+            return loaded;
+        }));
 
-            _redisMux = redisMux;
+        return lazyLoadedScript.Value;
+    }
+}
 
-            _scripts.TryAdd("ValidateMatchingTotals", new AsyncLazy<RedisScript>(() =>
-                LoadScriptAsync("ValidateMatchingTotals", $@"
-                    local deltaLender = tonumber(ARGV[1])
-                    -- your full Lua logic here
-                    return {{tostring(deltaLender)}}
-                ")));
 
-            // Add more scripts here...
+services.AddSingleton<IRedisScriptManager, RedisScriptManager>();
 
-            _initialized = true;
+
+
+public class YourScopedService
+{
+    private readonly IDatabase _redisDb;
+    private readonly IRedisScriptManager _scriptManager;
+    private readonly string _luaScript = "your Lua script here...";
+
+    public YourScopedService(IConnectionMultiplexer redis, IRedisScriptManager scriptManager)
+    {
+        _redisDb = redis.GetDatabase();
+        _scriptManager = scriptManager;
+    }
+
+    public async Task<RedisResult> ExecuteOptimizedScriptAsync(RedisKey[] keys, RedisValue[] values)
+    {
+        var loadedScript = await _scriptManager.GetOrLoadAsync(_luaScript);
+
+        try
+        {
+            // Attempt execution via SHA (fast path)
+            return await loadedScript.EvaluateAsync(_redisDb, keys, values);
+        }
+        catch (RedisServerException ex) when (ex.Message.StartsWith("NOSCRIPT", StringComparison.OrdinalIgnoreCase))
+        {
+            // Rare scenario: Script evicted from Redis (e.g. Redis restart or cache clear)
+            // Force reload script and execute again
+            loadedScript = await ReloadScriptAsync();
+            return await loadedScript.EvaluateAsync(_redisDb, keys, values);
         }
     }
 
-    private static async Task<RedisScript> LoadScriptAsync(string key, string script)
+    private async Task<LoadedLuaScript> ReloadScriptAsync()
     {
-        if (_redisMux == null)
-            throw new InvalidOperationException("LuaScriptRegistry not initialized.");
-
-        var db = _redisMux.GetDatabase();
-        var sha = await db.ScriptLoadAsync(script).ConfigureAwait(false);
-        return new RedisScript(script, sha);
+        // Force script reload into Redis
+        var prepared = LuaScript.Prepare(_luaScript);
+        var loaded = await prepared.LoadAsync(_redisDb.Multiplexer.GetServer(_redisDb.Multiplexer.GetEndPoints()[0]));
+        return loaded;
     }
-
-    public static Task<RedisScript> GetAsync(string key)
-    {
-        if (!_initialized)
-            throw new InvalidOperationException("LuaScriptRegistry not initialized.");
-
-        if (_scripts.TryGetValue(key, out var lazyScript))
-            return lazyScript.GetValueAsync();
-
-        throw new KeyNotFoundException($"Lua script '{key}' not registered.");
-    }
-
-    public static Task WarmUpAsync() => Task.WhenAll(_scripts.Values.Select(s => s.GetValueAsync()));
 }
-
-public record RedisScript(string Script, RedisKey Sha);
