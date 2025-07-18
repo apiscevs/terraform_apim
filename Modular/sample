@@ -70,3 +70,27 @@ public class YourScopedService
         return loaded;
     }
 }
+
+
+
+var result = await script2.EvaluateAsync(
+    _redis,
+    new 
+    {
+        keyLender = (RedisKey) lender.Key,
+        keyBorrower = (RedisKey) borrower.Key,
+
+        deltaLender = lender.Delta.ToString("G", CultureInfo.InvariantCulture),
+        maxLender = lender.MaxLimit.ToString("G", CultureInfo.InvariantCulture),
+        dbValLender = lender.DbBaseLine.HasValue 
+            ? lender.DbBaseLine.Value.ToString("G", CultureInfo.InvariantCulture) 
+            : "",
+        expAtLender = new DateTimeOffset(lender.ExpireAtUtc).ToUnixTimeMilliseconds(),
+
+        deltaBorrower = borrower.Delta.ToString("G", CultureInfo.InvariantCulture),
+        maxBorrower = borrower.MaxLimit.ToString("G", CultureInfo.InvariantCulture),
+        dbValBorrower = borrower.DbBaseLine.HasValue 
+            ? borrower.DbBaseLine.Value.ToString("G", CultureInfo.InvariantCulture) 
+            : "",
+        expAtBorrower = new DateTimeOffset(borrower.ExpireAtUtc).ToUnixTimeMilliseconds(),
+    });
