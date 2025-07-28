@@ -1,3 +1,13 @@
+using System;
+using System.Linq;
+using System.Net;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using Moq;
+using StackExchange.Redis;
+using Xunit;
+
 public class RedisScriptManagerTests
 {
     private readonly Mock<IConnectionMultiplexer> _redisMock;
@@ -10,108 +20,111 @@ public class RedisScriptManagerTests
         _redisMock = new Mock<IConnectionMultiplexer>();
         _serverMock = new Mock<IServer>();
 
-        _redisMock.Setup(r => r.GetEndPoints(It.IsAny<bool>()))
-                  .Returns(new EndPoint[] { new DnsEndPoint("localhost", 6379) });
+        _redisMock
+            .Setup(r => r.GetEndPoints(It.IsAny<bool>()))
+            .Returns(new EndPoint[] { new DnsEndPoint("localhost", 6379) });
 
-        _redisMock.Setup(r => r.GetServer(It.IsAny<EndPoint>()))
-                  .Returns(_serverMock.Object);
+        _redisMock
+            .Setup(r => r.GetServer(It.IsAny<EndPoint>()))
+            .Returns(_serverMock.Object);
 
+        // Correct signature: ScriptLoadAsync(LuaScript, CommandFlags) -> Task<LoadedLuaScript>
         _serverMock
-            .Setup(s => s.ScriptLoadAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()))
-            .Returns<RedisKey, CommandFlags>((script, flags) =>
+            .Setup(s => s.ScriptLoadAsync(It.IsAny<LuaScript>(), It.IsAny<CommandFlags>()))
+            .ReturnsAsync((LuaScript script, CommandFlags flags) =>
             {
                 Interlocked.Increment(ref _loadCallCount);
-                return Task.FromResult("mocked-sha1");
+                // Create a LoadedLuaScript instance without Redis by using reflection.
+                return CreateLoaded(script.ExecutableScript);
             });
 
         _scriptManager = new RedisScriptManager(_redisMock.Object);
     }
 
+    // Helper to create a LoadedLuaScript without a Redis server.
+    // It relies on the internal constructor (string original, string executable) present in current SE.Redis.
+    private static LoadedLuaScript CreateLoaded(string executableScript)
+    {
+        var type = typeof(LoadedLuaScript);
+        var ctor = type
+            .GetConstructors(BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(c =>
+            {
+                var ps = c.GetParameters();
+                return ps.Length == 2 && ps[0].ParameterType == typeof(string) && ps[1].ParameterType == typeof(string);
+            });
+
+        if (ctor == null)
+            throw new InvalidOperationException("Could not find LoadedLuaScript constructor; StackExchange.Redis may have changed.");
+
+        // Use the same script for "original" and "executable" in tests.
+        return (LoadedLuaScript)ctor.Invoke(new object[] { executableScript, executableScript });
+    }
+
     [Fact]
-    public async Task GetOrLoadAsync_LoadsScriptOnlyOnce()
+    public async Task GetOrLoadAsync_LoadsScriptOnlyOnce_WhenCalledConcurrently()
     {
         // Arrange
-        var scriptName = "my-script";
-        var scriptBody = "return 42";
-        var scriptDefinition = new ScriptDefinition(scriptName, scriptBody);
+        var scriptDefinition = new ScriptDefinition("my-script", "return 42");
 
-        // Act – call it multiple times
-        var task1 = _scriptManager.GetOrLoadAsync(scriptDefinition);
-        var task2 = _scriptManager.GetOrLoadAsync(scriptDefinition);
-        var task3 = _scriptManager.GetOrLoadAsync(scriptDefinition);
-        var results = await Task.WhenAll(task1, task2, task3);
+        // Act – call it multiple times concurrently
+        var t1 = _scriptManager.GetOrLoadAsync(scriptDefinition);
+        var t2 = _scriptManager.GetOrLoadAsync(scriptDefinition);
+        var t3 = _scriptManager.GetOrLoadAsync(scriptDefinition);
+        var results = await Task.WhenAll(t1, t2, t3);
 
-        // Assert – all results are the same instance
-        Assert.All(results, result => Assert.Equal(results[0].ExecutableScript, result.ExecutableScript));
+        // Assert – all results are the same instance (cache uses AsyncLazy)
+        Assert.Same(results[0], results[1]);
+        Assert.Same(results[0], results[2]);
 
         // Only one script load should have occurred
         Assert.Equal(1, _loadCallCount);
     }
-    
+
     [Fact]
-    public async Task GetOrLoadAsync_LoadsScriptOnlyOnce()
+    public async Task GetOrLoadAsync_LoadsScriptOnlyOnce_AcrossMultipleAwaiters()
     {
         // Arrange
         var scriptDefinition = new ScriptDefinition("lazy-script", "return 1");
-        var loadCount = 0;
-    
-        _serverMock
-            .Setup(s => s.ScriptLoadAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()))
-            .ReturnsAsync(() =>
-            {
-                Interlocked.Increment(ref loadCount);
-                return "sha1-lazy";
-            });
-    
+
         // Act
-        var task1 = _scriptManager.GetOrLoadAsync(scriptDefinition);
-        var task2 = _scriptManager.GetOrLoadAsync(scriptDefinition);
-        var task3 = _scriptManager.GetOrLoadAsync(scriptDefinition);
-        var results = await Task.WhenAll(task1, task2, task3);
-    
-        // Assert
-        Assert.All(results, r => Assert.Equal(results[0].ExecutableScript, r.ExecutableScript));
-        Assert.Equal(1, loadCount);
+        var t1 = _scriptManager.GetOrLoadAsync(scriptDefinition);
+        var t2 = _scriptManager.GetOrLoadAsync(scriptDefinition);
+        var t3 = _scriptManager.GetOrLoadAsync(scriptDefinition);
+        await Task.WhenAll(t1, t2, t3);
+
+        // Assert – only one load on the server
+        Assert.Equal(1, _loadCallCount);
     }
-    
+
     [Fact]
     public async Task GetOrLoadAsync_ReturnsCachedScriptOnSubsequentCalls()
     {
         // Arrange
         var scriptDefinition = new ScriptDefinition("cached-script", "return 2");
-    
-        _serverMock
-            .Setup(s => s.ScriptLoadAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()))
-            .ReturnsAsync("sha1-cached")
-            .Verifiable();
-    
+
         // Act
         var first = await _scriptManager.GetOrLoadAsync(scriptDefinition);
         var second = await _scriptManager.GetOrLoadAsync(scriptDefinition);
-    
-        // Assert
-        Assert.Equal(first.ExecutableScript, second.ExecutableScript);
-        _serverMock.Verify(s => s.ScriptLoadAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()), Times.Once);
+
+        // Assert – same instance, and load only once
+        Assert.Same(first, second);
+        _serverMock.Verify(s => s.ScriptLoadAsync(It.IsAny<LuaScript>(), It.IsAny<CommandFlags>()), Times.Once);
     }
-    
+
     [Fact]
     public async Task RemoveScript_RemovesFromCacheAndReloads()
     {
         // Arrange
         var scriptDefinition = new ScriptDefinition("temp-script", "return 3");
-    
-        var sha1Values = new Queue<string>(new[] { "sha1-first", "sha1-second" });
-    
-        _serverMock
-            .Setup(s => s.ScriptLoadAsync(It.IsAny<RedisKey>(), It.IsAny<CommandFlags>()))
-            .ReturnsAsync(() => sha1Values.Dequeue());
-    
+
         // Act
         var first = await _scriptManager.GetOrLoadAsync(scriptDefinition);
         _scriptManager.RemoveScript(scriptDefinition.Name);
         var second = await _scriptManager.GetOrLoadAsync(scriptDefinition);
-    
-        // Assert
-        Assert.NotEqual(first.ExecutableScript, second.ExecutableScript);
+
+        // Assert – after removal, the next get must reload (different instance, and 2 loads total)
+        Assert.NotSame(first, second);
+        _serverMock.Verify(s => s.ScriptLoadAsync(It.IsAny<LuaScript>(), It.IsAny<CommandFlags>()), Times.Exactly(2));
     }
 }
