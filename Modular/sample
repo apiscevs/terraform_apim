@@ -1,89 +1,113 @@
-public class RedisScriptManagerTests
-{
-    private readonly Mock<IConnectionMultiplexer> _redisMock;
-    private readonly Mock<IServer> _serverMock;
-    private readonly RedisScriptManager _scriptManager;
-    private int _loadCallCount;
+    // --- helpers ------------------------------------------------------------
 
-    public RedisScriptManagerTests()
+    // Create a LoadedLuaScript instance without touching Redis.
+    // Works against current StackExchange.Redis versions – if the ctor changes,
+    // it will fail fast with a clear error.
+    private static LoadedLuaScript CreateLoaded(string text = "return 0")
     {
-        _redisMock = new Mock<IConnectionMultiplexer>();
-        _serverMock = new Mock<IServer>();
-
-        var ep = new DnsEndPoint("localhost", 6379);
-
-        _redisMock.Setup(r => r.GetEndPoints(It.IsAny<bool>()))
-                  .Returns(new EndPoint[] { ep });
-
-        _redisMock.Setup(r => r.GetServer(It.IsAny<EndPoint>()))
-                  .Returns(_serverMock.Object);
-
-        // LuaScript.LoadAsync uses server.ScriptLoadAsync(string, flags) -> Task<byte[]>
-        _serverMock
-            .Setup(s => s.ScriptLoadAsync(It.IsAny<string>(), It.IsAny<CommandFlags>()))
-            .ReturnsAsync(() =>
+        var type = typeof(LoadedLuaScript);
+        var ctor = type
+            .GetConstructors(BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(c =>
             {
-                Interlocked.Increment(ref _loadCallCount);
-                // 20-byte SHA1-like payload is fine for tests
-                return new byte[] { 1,2,3,4,5,6,7,8,9,10, 11,12,13,14,15,16,17,18,19,20 };
+                var ps = c.GetParameters();
+                return ps.Length == 2 && ps[0].ParameterType == typeof(string) && ps[1].ParameterType == typeof(string);
             });
 
-        // LoadAsync also touches server.Multiplexer; make sure it isn’t null
-        _serverMock.SetupGet(s => s.Multiplexer).Returns(_redisMock.Object);
+        if (ctor == null)
+            throw new InvalidOperationException("LoadedLuaScript non-public ctor not found; update test helper.");
 
-        _scriptManager = new RedisScriptManager(_redisMock.Object);
+        return (LoadedLuaScript)ctor.Invoke(new object[] { text, text });
     }
+
+    private void ReturnScriptResult(RedisResult result)
+    {
+        // This is the overload EvaluateAsync will hit for a LoadedLuaScript:
+        // IDatabaseAsync.ScriptEvaluateAsync(LoadedLuaScript script, object? parameters = null, RedisKey? key = null, CommandFlags flags = CommandFlags.None)
+        _dbMock
+            .Setup(d => d.ScriptEvaluateAsync(
+                It.IsAny<LoadedLuaScript>(),
+                It.IsAny<object?>(),
+                It.IsAny<RedisKey?>(),
+                It.IsAny<CommandFlags>()))
+            .ReturnsAsync(result);
+    }
+
+    // --- tests --------------------------------------------------------------
 
     [Fact]
-    public async Task GetOrLoadAsync_LoadsScriptOnlyOnce_WhenCalledConcurrently()
+    public async Task GetCurrentMatchedAmountAsync_returns_decimal_from_script()
     {
-        var def = new ScriptDefinition("my-script", "return 42");
+        // Arrange
+        var loaded = CreateLoaded("return 123.45");
+        _scriptManagerMock
+            .Setup(m => m.GetOrLoadAsync(It.IsAny<ScriptDefinition>()))
+            .ReturnsAsync(loaded);
 
-        var t1 = _scriptManager.GetOrLoadAsync(def);
-        var t2 = _scriptManager.GetOrLoadAsync(def);
-        var t3 = _scriptManager.GetOrLoadAsync(def);
-        var results = await Task.WhenAll(t1, t2, t3);
+        // Script returns "123.45" -> service should parse to 123.45m
+        ReturnScriptResult(RedisResult.Create((RedisValue)"123.45"));
 
-        Assert.Same(results[0], results[1]);
-        Assert.Same(results[0], results[2]);
-        Assert.Equal(1, _loadCallCount);
+        // Act
+        var amount = await _svc.GetCurrentMatchedAmountAsync(
+            partyPlatformId: "party-1",
+            platformActivity: default); // use any valid enum value in your codebase
+
+        // Assert
+        Assert.Equal(123.45m, amount);
+        _dbMock.Verify(d => d.ScriptEvaluateAsync(
+            It.IsAny<LoadedLuaScript>(), It.IsAny<object?>(), It.IsAny<RedisKey?>(), It.IsAny<CommandFlags>()),
+            Times.Once);
     }
 
-    [Fact]
-    public async Task GetOrLoadAsync_LoadsScriptOnlyOnce_AcrossMultipleAwaiters()
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(0, false)]
+    public async Task IsMatchingLimitReachedAsync_maps_redis_result_to_bool(long scriptReturn, bool expected)
     {
-        var def = new ScriptDefinition("lazy-script", "return 1");
+        // Arrange
+        var loaded = CreateLoaded("return <is-reached>");
+        _scriptManagerMock
+            .Setup(m => m.GetOrLoadAsync(It.IsAny<ScriptDefinition>()))
+            .ReturnsAsync(loaded);
 
-        var t1 = _scriptManager.GetOrLoadAsync(def);
-        var t2 = _scriptManager.GetOrLoadAsync(def);
-        var t3 = _scriptManager.GetOrLoadAsync(def);
-        await Task.WhenAll(t1, t2, t3);
+        ReturnScriptResult(RedisResult.Create((RedisValue)scriptReturn));
 
-        Assert.Equal(1, _loadCallCount);
+        // Act
+        var isReached = await _svc.IsMatchingLimitReachedAsync(
+            partyPlatformId: "party-X",
+            partyType: default,
+            platformActivity: default);
+
+        // Assert
+        Assert.Equal(expected, isReached);
+        _dbMock.Verify(d => d.ScriptEvaluateAsync(
+            It.IsAny<LoadedLuaScript>(), It.IsAny<object?>(), It.IsAny<RedisKey?>(), It.IsAny<CommandFlags>()),
+            Times.Once);
     }
 
-    [Fact]
-    public async Task GetOrLoadAsync_ReturnsCachedScriptOnSubsequentCalls()
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(0, false)]
+    public async Task WillMatchingLimitExceedAsync_maps_redis_result_to_bool(long scriptReturn, bool expected)
     {
-        var def = new ScriptDefinition("cached-script", "return 2");
+        // Arrange
+        var loaded = CreateLoaded("return <will-exceed>");
+        _scriptManagerMock
+            .Setup(m => m.GetOrLoadAsync(It.IsAny<ScriptDefinition>()))
+            .ReturnsAsync(loaded);
 
-        var first = await _scriptManager.GetOrLoadAsync(def);
-        var second = await _scriptManager.GetOrLoadAsync(def);
+        ReturnScriptResult(RedisResult.Create((RedisValue)scriptReturn));
 
-        Assert.Same(first, second);
-        _serverMock.Verify(s => s.ScriptLoadAsync(It.IsAny<string>(), It.IsAny<CommandFlags>()), Times.Once);
+        // Act
+        var willExceed = await _svc.WillMatchingLimitExceedAsync(
+            partyPlatformId: "party-X",
+            partyType: default,
+            platformActivity: default,
+            amount: 250m);
+
+        // Assert
+        Assert.Equal(expected, willExceed);
+        _dbMock.Verify(d => d.ScriptEvaluateAsync(
+            It.IsAny<LoadedLuaScript>(), It.IsAny<object?>(), It.IsAny<RedisKey?>(), It.IsAny<CommandFlags>()),
+            Times.Once);
     }
-
-    [Fact]
-    public async Task RemoveScript_RemovesFromCacheAndReloads()
-    {
-        var def = new ScriptDefinition("temp-script", "return 3");
-
-        var first = await _scriptManager.GetOrLoadAsync(def);
-        _scriptManager.RemoveScript(def.Name);
-        var second = await _scriptManager.GetOrLoadAsync(def);
-
-        Assert.NotSame(first, second);
-        _serverMock.Verify(s => s.ScriptLoadAsync(It.IsAny<string>(), It.IsAny<CommandFlags>()), Times.Exactly(2));
-    }
-}
