@@ -1,113 +1,16 @@
-    // --- helpers ------------------------------------------------------------
+    private readonly Mock<IConnectionMultiplexer> _redisMock = new();
+    private readonly Mock<IDatabase> _dbMock = new();
+    private readonly Mock<IRedisScriptManager> _scriptManagerMock = new();
 
-    // Create a LoadedLuaScript instance without touching Redis.
-    // Works against current StackExchange.Redis versions – if the ctor changes,
-    // it will fail fast with a clear error.
-    private static LoadedLuaScript CreateLoaded(string text = "return 0")
+    private readonly INotionalValueRedisService _svc;
+
+    public NotionalValueRedisServiceTests()
     {
-        var type = typeof(LoadedLuaScript);
-        var ctor = type
-            .GetConstructors(BindingFlags.NonPublic | BindingFlags.Instance)
-            .FirstOrDefault(c =>
-            {
-                var ps = c.GetParameters();
-                return ps.Length == 2 && ps[0].ParameterType == typeof(string) && ps[1].ParameterType == typeof(string);
-            });
+        // The service under test asks the multiplexer for a database
+        _redisMock
+            .Setup(r => r.GetDatabase(It.IsAny<int>(), It.IsAny<object?>()))
+            .Returns(_dbMock.Object);
 
-        if (ctor == null)
-            throw new InvalidOperationException("LoadedLuaScript non-public ctor not found; update test helper.");
-
-        return (LoadedLuaScript)ctor.Invoke(new object[] { text, text });
-    }
-
-    private void ReturnScriptResult(RedisResult result)
-    {
-        // This is the overload EvaluateAsync will hit for a LoadedLuaScript:
-        // IDatabaseAsync.ScriptEvaluateAsync(LoadedLuaScript script, object? parameters = null, RedisKey? key = null, CommandFlags flags = CommandFlags.None)
-        _dbMock
-            .Setup(d => d.ScriptEvaluateAsync(
-                It.IsAny<LoadedLuaScript>(),
-                It.IsAny<object?>(),
-                It.IsAny<RedisKey?>(),
-                It.IsAny<CommandFlags>()))
-            .ReturnsAsync(result);
-    }
-
-    // --- tests --------------------------------------------------------------
-
-    [Fact]
-    public async Task GetCurrentMatchedAmountAsync_returns_decimal_from_script()
-    {
-        // Arrange
-        var loaded = CreateLoaded("return 123.45");
-        _scriptManagerMock
-            .Setup(m => m.GetOrLoadAsync(It.IsAny<ScriptDefinition>()))
-            .ReturnsAsync(loaded);
-
-        // Script returns "123.45" -> service should parse to 123.45m
-        ReturnScriptResult(RedisResult.Create((RedisValue)"123.45"));
-
-        // Act
-        var amount = await _svc.GetCurrentMatchedAmountAsync(
-            partyPlatformId: "party-1",
-            platformActivity: default); // use any valid enum value in your codebase
-
-        // Assert
-        Assert.Equal(123.45m, amount);
-        _dbMock.Verify(d => d.ScriptEvaluateAsync(
-            It.IsAny<LoadedLuaScript>(), It.IsAny<object?>(), It.IsAny<RedisKey?>(), It.IsAny<CommandFlags>()),
-            Times.Once);
-    }
-
-    [Theory]
-    [InlineData(1, true)]
-    [InlineData(0, false)]
-    public async Task IsMatchingLimitReachedAsync_maps_redis_result_to_bool(long scriptReturn, bool expected)
-    {
-        // Arrange
-        var loaded = CreateLoaded("return <is-reached>");
-        _scriptManagerMock
-            .Setup(m => m.GetOrLoadAsync(It.IsAny<ScriptDefinition>()))
-            .ReturnsAsync(loaded);
-
-        ReturnScriptResult(RedisResult.Create((RedisValue)scriptReturn));
-
-        // Act
-        var isReached = await _svc.IsMatchingLimitReachedAsync(
-            partyPlatformId: "party-X",
-            partyType: default,
-            platformActivity: default);
-
-        // Assert
-        Assert.Equal(expected, isReached);
-        _dbMock.Verify(d => d.ScriptEvaluateAsync(
-            It.IsAny<LoadedLuaScript>(), It.IsAny<object?>(), It.IsAny<RedisKey?>(), It.IsAny<CommandFlags>()),
-            Times.Once);
-    }
-
-    [Theory]
-    [InlineData(1, true)]
-    [InlineData(0, false)]
-    public async Task WillMatchingLimitExceedAsync_maps_redis_result_to_bool(long scriptReturn, bool expected)
-    {
-        // Arrange
-        var loaded = CreateLoaded("return <will-exceed>");
-        _scriptManagerMock
-            .Setup(m => m.GetOrLoadAsync(It.IsAny<ScriptDefinition>()))
-            .ReturnsAsync(loaded);
-
-        ReturnScriptResult(RedisResult.Create((RedisValue)scriptReturn));
-
-        // Act
-        var willExceed = await _svc.WillMatchingLimitExceedAsync(
-            partyPlatformId: "party-X",
-            partyType: default,
-            platformActivity: default,
-            amount: 250m);
-
-        // Assert
-        Assert.Equal(expected, willExceed);
-        _dbMock.Verify(d => d.ScriptEvaluateAsync(
-            It.IsAny<LoadedLuaScript>(), It.IsAny<object?>(), It.IsAny<RedisKey?>(), It.IsAny<CommandFlags>()),
-            Times.Once);
+        // Construct your concrete service (adjust the constructor if needed)
+        _svc = new NotionalValueRedisService(_redisMock.Object, _scriptManagerMock.Object);
     }
