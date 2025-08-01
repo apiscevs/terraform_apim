@@ -1,104 +1,11 @@
-public interface ILuaExecutor
-{
-    Task<RedisResult> EvalAsync(
-        ScriptDefinition script,
-        object? args = null,
-        RedisKey[]? keys = null,
-        CommandFlags flags = CommandFlags.None,
-        CancellationToken ct = default);
-}
-
-using System.Threading;
-using System.Threading.Tasks;
-using EasyCaching.Redis;     // IRedisDatabaseProvider
-using StackExchange.Redis;
-
-public sealed class LuaExecutor : ILuaExecutor
-{
-    private readonly IRedisDatabaseProvider _redis;
-    private readonly IRedisScriptManager _scripts;
-
-    public LuaExecutor(IRedisDatabaseProvider redis, IRedisScriptManager scripts)
-    {
-        _redis = redis;
-        _scripts = scripts;
-    }
-
-    public async Task<RedisResult> EvalAsync(
-        ScriptDefinition script, object? args = null, RedisKey[]? keys = null,
-        CommandFlags flags = CommandFlags.None, CancellationToken ct = default)
-    {
-        var db = _redis.GetDatabase(); // or GetDatabase(dbIndex) if you use one
-        var loaded = await _scripts.GetOrLoadAsync(script).ConfigureAwait(false);
-        // Let SE.Redis decide EVAL vs EVALSHA internally; we don’t care here
-        return await loaded.EvaluateAsync(db, keys, args, flags).ConfigureAwait(false);
-    }
-}
-
-
-public class NotionalValueRedisServiceTests
-{
-    private readonly Mock<ILuaExecutor> _lua = new();
-    private readonly NotionalValueRedisService _svc;
-
-    public NotionalValueRedisServiceTests()
-    {
-        _svc = new NotionalValueRedisService(
-            _lua.Object,
-            Mock.Of<ILogger<NotionalValueRedisService>>()
-            // , other deps as Mock.Of<...>() if needed
-        );
-    }
-
-    [Fact]
-    public async Task GetCurrentMatchedAmountAsync_returns_decimal()
-    {
-        _lua.Setup(x => x.EvalAsync(
-                It.IsAny<ScriptDefinition>(),
-                It.IsAny<object?>(),
-                It.IsAny<RedisKey[]>(),
-                It.IsAny<CommandFlags>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(RedisResult.Create((RedisValue)"123.45"));
-
-        var amount = await _svc.GetCurrentMatchedAmountAsync("party-1", PlatformActivity.Lender);
-
-        Assert.Equal(123.45m, amount);
-    }
-
-    [Theory]
-    [InlineData(1, true)]
-    [InlineData(0, false)]
-    public async Task IsMatchingLimitReachedAsync_maps_result_to_bool(long redisVal, bool expected)
-    {
-        _lua.Setup(x => x.EvalAsync(
-                It.IsAny<ScriptDefinition>(),
-                It.IsAny<object?>(),
-                It.IsAny<RedisKey[]>(),
-                It.IsAny<CommandFlags>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(RedisResult.Create((RedisValue)redisVal));
-
-        var ok = await _svc.IsMatchingLimitReachedAsync("p", default, default);
-
-        Assert.Equal(expected, ok);
-    }
-
-    [Theory]
-    [InlineData(1, true)]
-    [InlineData(0, false)]
-    public async Task WillMatchingLimitExceedAsync_maps_result_to_bool(long redisVal, bool expected)
-    {
-        _lua.Setup(x => x.EvalAsync(
-                It.IsAny<ScriptDefinition>(),
-                It.IsAny<object?>(),
-                It.IsAny<RedisKey[]>(),
-                It.IsAny<CommandFlags>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(RedisResult.Create((RedisValue)redisVal));
-
-        var ok = await _svc.WillMatchingLimitExceedAsync("p", default, default, 250m);
-
-        Assert.Equal(expected, ok);
-    }
-}
+# Build argument array; no quoting headaches
+$args = @(
+  '-n',
+  '-t', $pathToCleanupJmx,
+  "-JatomAdminUrl=$atomAdminUrl",
+  "-JcosmosDbHost=$cosmosDbHost",
+  "-JcosmosDbKey=$cosmosDbKey",
+  "-JproxyHostName=$proxyHostName",
+  "-JproxyPort=$proxyPort"
+)
+& jmeter @args | Out-Null
