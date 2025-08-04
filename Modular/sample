@@ -1,11 +1,51 @@
-# Build argument array; no quoting headaches
-$args = @(
-  '-n',
-  '-t', $pathToCleanupJmx,
-  "-JatomAdminUrl=$atomAdminUrl",
-  "-JcosmosDbHost=$cosmosDbHost",
-  "-JcosmosDbKey=$cosmosDbKey",
-  "-JproxyHostName=$proxyHostName",
-  "-JproxyPort=$proxyPort"
-)
-& jmeter @args | Out-Null
+public interface IAuditTrailLogger
+{
+    void Log(LogEventLevel level, string messageTemplate, params object?[] propertyValues);
+    // add convenience wrappers as needed
+}
+
+public sealed class AuditTrailSerilog : IAuditTrailLogger, IDisposable
+{
+    private readonly ILogger _logger;
+    private readonly TelemetryClient _tc;
+
+    public AuditTrailSerilog(string connectionString, IHostApplicationLifetime life)
+    {
+        // ----- Durable channel -----------------------------------------
+        var channel = new ServerTelemetryChannel
+        {
+            StorageFolder = "/tmp/ai-offline",
+            FlushInterval = TimeSpan.FromSeconds(5),
+            MaxTelemetryBufferCapacity = 20_000
+        };
+
+        var tcfg = new TelemetryConfiguration
+        {
+            ConnectionString = connectionString,
+            TelemetryChannel  = channel
+        };
+        tcfg.TelemetryInitializers.Add(new OperationCorrelationTelemetryInitializer());
+
+        // ----- Serilog sink (async, never drop) -------------------------
+        _logger = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .WriteTo.Async(a =>
+                a.ApplicationInsights(tcfg, TelemetryConverter.Traces),
+                bufferSize: 20_000,
+                blockWhenFull: true)
+            .CreateLogger();
+
+        // ----- Flush on shutdown ---------------------------------------
+        _tc = new TelemetryClient(tcfg);
+        life.ApplicationStopping.Register(() =>
+        {
+            _tc.Flush();
+            Thread.Sleep(5_000);      // wait for sender thread
+        });
+    }
+
+    public void Log(LogEventLevel level, string messageTemplate, params object?[] propertyValues)
+        => _logger.Write(level, messageTemplate, propertyValues);
+
+    public void Dispose() => (_logger as IDisposable)?.Dispose();
+}
