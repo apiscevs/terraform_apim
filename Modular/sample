@@ -1,14 +1,2 @@
-int code = (prev.getResponseCode() ?: '0') as int
-int cnt  = (vars.get('retryCount') ?: '0') as int
-int max  = (vars.get('retryMax') ?: '3') as int
-
-boolean shouldRetry = (code == 401 || code >= 500) && cnt < max
-
-// optional: exponential backoff + jitter (capped)
-if (shouldRetry) {
-  long delay = (long)(200 * Math.pow(2, cnt)) + (long)(Math.random() * 150)
-  Thread.sleep(Math.min(delay, 2000))
-}
-
-vars.put('retry', shouldRetry.toString())
-if (shouldRetry) vars.put('retryCount', String.valueOf(cnt + 1))
+set HEAP=-Xms512m -Xmx2g -XX:MaxMetaspaceSize=512m
+set JVM_ARGS=-Xss256k -XX:HeapBaseMinAddress=34g -Djava.awt.headless=true
