@@ -1,51 +1,25 @@
-public interface IAuditTrailLogger
+.AddPolicyHandler((sp, req) =>
 {
-    void Log(LogEventLevel level, string messageTemplate, params object?[] propertyValues);
-    // add convenience wrappers as needed
-}
+    // this client only calls /userinfo; if not, guard by path:
+    var isUserInfo = req.RequestUri?.AbsolutePath.Contains(
+        "/rest/1.0/idptoken/userinfo", StringComparison.OrdinalIgnoreCase) == true;
+    if (!isUserInfo) return Policy.NoOpAsync<HttpResponseMessage>();
 
-public sealed class AuditTrailSerilog : IAuditTrailLogger, IDisposable
-{
-    private readonly ILogger _logger;
-    private readonly TelemetryClient _tc;
+    var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("IdpRetry");
+    var jitter = new Random();
 
-    public AuditTrailSerilog(string connectionString, IHostApplicationLifetime life)
-    {
-        // ----- Durable channel -----------------------------------------
-        var channel = new ServerTelemetryChannel
-        {
-            StorageFolder = "/tmp/ai-offline",
-            FlushInterval = TimeSpan.FromSeconds(5),
-            MaxTelemetryBufferCapacity = 20_000
-        };
-
-        var tcfg = new TelemetryConfiguration
-        {
-            ConnectionString = connectionString,
-            TelemetryChannel  = channel
-        };
-        tcfg.TelemetryInitializers.Add(new OperationCorrelationTelemetryInitializer());
-
-        // ----- Serilog sink (async, never drop) -------------------------
-        _logger = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .WriteTo.Async(a =>
-                a.ApplicationInsights(tcfg, TelemetryConverter.Traces),
-                bufferSize: 20_000,
-                blockWhenFull: true)
-            .CreateLogger();
-
-        // ----- Flush on shutdown ---------------------------------------
-        _tc = new TelemetryClient(tcfg);
-        life.ApplicationStopping.Register(() =>
-        {
-            _tc.Flush();
-            Thread.Sleep(5_000);      // wait for sender thread
-        });
-    }
-
-    public void Log(LogEventLevel level, string messageTemplate, params object?[] propertyValues)
-        => _logger.Write(level, messageTemplate, propertyValues);
-
-    public void Dispose() => (_logger as IDisposable)?.Dispose();
-}
+    return Policy<HttpResponseMessage>
+        // retry 401 (and 429 if you want)
+        .HandleResult(r => r.StatusCode == HttpStatusCode.Unauthorized || (int)r.StatusCode == 429)
+        // exponential backoff + jitter, 2 retries: ~200ms, ~400ms (+ jitter)
+        .WaitAndRetryAsync(2,
+            attempt => TimeSpan.FromMilliseconds(200 * Math.Pow(2, attempt - 1))
+                      + TimeSpan.FromMilliseconds(jitter.Next(50, 150)),
+            onRetry: (outcome, delay, attempt, ctx) =>
+            {
+                var r = outcome.Result;
+                logger.LogWarning("IDP retry #{Attempt} in {Delay}ms for {Url}, status={Status}",
+                    attempt, delay.TotalMilliseconds,
+                    r?.RequestMessage?.RequestUri, (int?)r?.StatusCode);
+            });
+});
