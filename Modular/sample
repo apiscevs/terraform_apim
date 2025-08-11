@@ -1,25 +1,14 @@
-.AddPolicyHandler((sp, req) =>
-{
-    // this client only calls /userinfo; if not, guard by path:
-    var isUserInfo = req.RequestUri?.AbsolutePath.Contains(
-        "/rest/1.0/idptoken/userinfo", StringComparison.OrdinalIgnoreCase) == true;
-    if (!isUserInfo) return Policy.NoOpAsync<HttpResponseMessage>();
+int code = (prev.getResponseCode() ?: '0') as int
+int cnt  = (vars.get('retryCount') ?: '0') as int
+int max  = (vars.get('retryMax') ?: '3') as int
 
-    var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("IdpRetry");
-    var jitter = new Random();
+boolean shouldRetry = (code == 401 || code >= 500) && cnt < max
 
-    return Policy<HttpResponseMessage>
-        // retry 401 (and 429 if you want)
-        .HandleResult(r => r.StatusCode == HttpStatusCode.Unauthorized || (int)r.StatusCode == 429)
-        // exponential backoff + jitter, 2 retries: ~200ms, ~400ms (+ jitter)
-        .WaitAndRetryAsync(2,
-            attempt => TimeSpan.FromMilliseconds(200 * Math.Pow(2, attempt - 1))
-                      + TimeSpan.FromMilliseconds(jitter.Next(50, 150)),
-            onRetry: (outcome, delay, attempt, ctx) =>
-            {
-                var r = outcome.Result;
-                logger.LogWarning("IDP retry #{Attempt} in {Delay}ms for {Url}, status={Status}",
-                    attempt, delay.TotalMilliseconds,
-                    r?.RequestMessage?.RequestUri, (int?)r?.StatusCode);
-            });
-});
+// optional: exponential backoff + jitter (capped)
+if (shouldRetry) {
+  long delay = (long)(200 * Math.pow(2, cnt)) + (long)(Math.random() * 150)
+  Thread.sleep(Math.min(delay, 2000))
+}
+
+vars.put('retry', shouldRetry.toString())
+if (shouldRetry) vars.put('retryCount', String.valueOf(cnt + 1))
