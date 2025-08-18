@@ -1,78 +1,74 @@
-// xUnit collection for all Redis integration tests
-[CollectionDefinition("RedisIntegration")]
+using EasyCaching.Redis;
+using StackExchange.Redis;
+
+public sealed class MultiplexerRedisProvider : IRedisDatabaseProvider
+{
+    private readonly IConnectionMultiplexer _mux;
+    private readonly int _db;
+
+    public MultiplexerRedisProvider(IConnectionMultiplexer mux, int db = -1)
+    {
+        _mux = mux;
+        _db = db; // -1 = default DB
+    }
+
+    public IDatabase GetDatabase() => _mux.GetDatabase(_db);
+}
+
+
+
+[CollectionDefinition("RedisIntegration", DisableParallelization = true)]
 public sealed class RedisIntegrationCollection : ICollectionFixture<RedisFixture> { }
 
 public sealed class RedisFixture : IAsyncLifetime, IDisposable
 {
     public ConnectionMultiplexer Connection { get; private set; } = default!;
-    public IDatabase Db => Connection.GetDatabase();
     public IServer Server { get; private set; } = default!;
+    public IRedisDatabaseProvider Provider { get; private set; } = default!;
+    public IDatabase Db => Provider.GetDatabase();
     public RedisScriptManager ScriptManager { get; private set; } = default!;
 
     public async Task InitializeAsync()
     {
-        // One connection for all tests in this collection
-        Connection = await ConnectionMultiplexer.ConnectAsync("localhost:6379,allowAdmin=true,abortConnect=false");
+        Connection = await ConnectionMultiplexer
+            .ConnectAsync("localhost:6379,allowAdmin=true,abortConnect=false");
+
         var ep = Connection.GetEndPoints()[0];
         Server = Connection.GetServer(ep);
-        ScriptManager = new RedisScriptManager(Connection);
 
-        // Clean start for each run (or use key prefixes if you prefer)
-        await Server.FlushDatabaseAsync(Db.Database);
+        Provider = new MultiplexerRedisProvider(Connection); // <-- adapter
+        ScriptManager = new RedisScriptManager(Provider);    // <-- expects IRedisDatabaseProvider
+
+        await Server.FlushDatabaseAsync(Db.Database); // clean state
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
-
-    public void Dispose()
-    {
-        Connection?.Dispose();
-    }
-
-    public Task FlushAsync() => Server.FlushDatabaseAsync(Db.Database);
+    public void Dispose() => Connection?.Dispose();
 }
-2) A tiny provider that returns the real IDatabase
-csharp
-Копировать
-Редактировать
-public sealed class FixtureRedisDatabaseProvider : IRedisDatabaseProvider
-{
-    private readonly IDatabase _db;
-    public FixtureRedisDatabaseProvider(IDatabase db) => _db = db;
-    public IDatabase GetDatabase() => _db;
-}
-3) Refactor your test to use the fixture (no new connections!)
-csharp
-Копировать
-Редактировать
+
+
 [Collection("RedisIntegration")]
 public class NotionalValueRedisServiceIntegrationTests
 {
     private readonly RedisFixture _fx;
-    private readonly Mock<IMarketTimeService> _marketTime = new();
+    private readonly Mock<IMarketTimeService> _marketTimeService = new();
     private readonly Mock<IPartyRepository> _partyRepo = new();
     private readonly Mock<INotionalValueService> _notionalValue = new();
 
-    public NotionalValueRedisServiceIntegrationTests(RedisFixture fx)
-    {
-        _fx = fx;
-    }
+    public NotionalValueRedisServiceIntegrationTests(RedisFixture fx) => _fx = fx;
 
     [Fact]
-    public async Task Example_integration_test()
+    public async Task Example()
     {
-        // Clean state per test (or use a unique key prefix)
-        await _fx.FlushAsync();
+        await _fx.Server.FlushDatabaseAsync(_fx.Db.Database);
 
-        // Use the ONE shared multiplexer/DB everywhere
-        var redisProvider = new FixtureRedisDatabaseProvider(_fx.Db);
-        var luaExecutor   = new LuaExecutor(redisProvider, _fx.ScriptManager);
-
+        var lua = new LuaExecutor(_fx.Provider, _fx.ScriptManager); // same provider
         var sut = new NotionalValueRedisService(
-            _marketTime.Object,
+            _marketTimeService.Object,
             _notionalValue.Object,
             _partyRepo.Object,
-            _fx.ScriptManager,             // <- same connection under the hood
-            luaExecutor,
+            _fx.ScriptManager,                // shares the provider/connection
+            lua,
             Mock.Of<ILogger<NotionalValueRedisService>>()
         );
 
