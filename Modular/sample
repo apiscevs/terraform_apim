@@ -1,2 +1,81 @@
-set HEAP=-Xms512m -Xmx2g -XX:MaxMetaspaceSize=512m
-set JVM_ARGS=-Xss256k -XX:HeapBaseMinAddress=34g -Djava.awt.headless=true
+// xUnit collection for all Redis integration tests
+[CollectionDefinition("RedisIntegration")]
+public sealed class RedisIntegrationCollection : ICollectionFixture<RedisFixture> { }
+
+public sealed class RedisFixture : IAsyncLifetime, IDisposable
+{
+    public ConnectionMultiplexer Connection { get; private set; } = default!;
+    public IDatabase Db => Connection.GetDatabase();
+    public IServer Server { get; private set; } = default!;
+    public RedisScriptManager ScriptManager { get; private set; } = default!;
+
+    public async Task InitializeAsync()
+    {
+        // One connection for all tests in this collection
+        Connection = await ConnectionMultiplexer.ConnectAsync("localhost:6379,allowAdmin=true,abortConnect=false");
+        var ep = Connection.GetEndPoints()[0];
+        Server = Connection.GetServer(ep);
+        ScriptManager = new RedisScriptManager(Connection);
+
+        // Clean start for each run (or use key prefixes if you prefer)
+        await Server.FlushDatabaseAsync(Db.Database);
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
+
+    public void Dispose()
+    {
+        Connection?.Dispose();
+    }
+
+    public Task FlushAsync() => Server.FlushDatabaseAsync(Db.Database);
+}
+2) A tiny provider that returns the real IDatabase
+csharp
+Копировать
+Редактировать
+public sealed class FixtureRedisDatabaseProvider : IRedisDatabaseProvider
+{
+    private readonly IDatabase _db;
+    public FixtureRedisDatabaseProvider(IDatabase db) => _db = db;
+    public IDatabase GetDatabase() => _db;
+}
+3) Refactor your test to use the fixture (no new connections!)
+csharp
+Копировать
+Редактировать
+[Collection("RedisIntegration")]
+public class NotionalValueRedisServiceIntegrationTests
+{
+    private readonly RedisFixture _fx;
+    private readonly Mock<IMarketTimeService> _marketTime = new();
+    private readonly Mock<IPartyRepository> _partyRepo = new();
+    private readonly Mock<INotionalValueService> _notionalValue = new();
+
+    public NotionalValueRedisServiceIntegrationTests(RedisFixture fx)
+    {
+        _fx = fx;
+    }
+
+    [Fact]
+    public async Task Example_integration_test()
+    {
+        // Clean state per test (or use a unique key prefix)
+        await _fx.FlushAsync();
+
+        // Use the ONE shared multiplexer/DB everywhere
+        var redisProvider = new FixtureRedisDatabaseProvider(_fx.Db);
+        var luaExecutor   = new LuaExecutor(redisProvider, _fx.ScriptManager);
+
+        var sut = new NotionalValueRedisService(
+            _marketTime.Object,
+            _notionalValue.Object,
+            _partyRepo.Object,
+            _fx.ScriptManager,             // <- same connection under the hood
+            luaExecutor,
+            Mock.Of<ILogger<NotionalValueRedisService>>()
+        );
+
+        // arrange/act/assert...
+    }
+}
