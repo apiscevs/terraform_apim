@@ -1,12 +1,5 @@
-Description:
-Our app is performance-critical and currently uses Azure Cosmos DB. The SDK supports two connection modes:
+Our app uses Redis via EasyCaching, and serialization format impacts both performance and payload size. Right now we use JSON serialization, which is human-readable but less efficient.
 
-Gateway mode (HTTPS, port 443) → simpler but higher latency.
+MessagePack is a compact binary format that’s well-supported in .NET and in EasyCaching. It typically offers faster serialization/deserialization and smaller payloads, which can reduce Redis network and memory overhead.
 
-Direct mode (TCP) → lower latency and better throughput, but needs open outbound ports and may require infra adjustments.
-
-We should research which mode we’re using now, test the impact of Direct mode, and update configuration if it gives us measurable performance improvements.
-
-Notes:
-
-Direct mode is generally recommended for production workloads.
+We should research the effort to switch from JSON to MessagePack in our Redis cache layer, test performance improvements, and update configuration if the gains are significant.
