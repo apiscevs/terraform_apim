@@ -1,5 +1,33 @@
-Our app uses Redis via EasyCaching, and serialization format impacts both performance and payload size. Right now we use JSON serialization, which is human-readable but less efficient.
+param (
+    [Parameter(Mandatory = $false)]
+    [string]$EnvironmentName,
 
-MessagePack is a compact binary format that’s well-supported in .NET and in EasyCaching. It typically offers faster serialization/deserialization and smaller payloads, which can reduce Redis network and memory overhead.
+    [Parameter(Mandatory = $false)]
+    [string]$ApiRevision,
 
-We should research the effort to switch from JSON to MessagePack in our Redis cache layer, test performance improvements, and update configuration if the gains are significant.
+    [Parameter(Mandatory = $false)]
+    [string]$ClientId,
+
+    [Parameter(Mandatory = $false)]
+    [string]$ClientSecret
+)
+
+# Validation and fallback to environment variables
+if (-not $EnvironmentName -or [string]::IsNullOrWhiteSpace($EnvironmentName)) {
+    if ($env:AZURE_APIM_ENVIRONMENT_NAME) {
+        $EnvironmentName = $env:AZURE_APIM_ENVIRONMENT_NAME
+    } else {
+        throw "EnvironmentName is required but was not provided and AZURE_APIM_ENVIRONMENT_NAME is not set."
+    }
+}
+
+if (-not $ApiRevision -or [string]::IsNullOrWhiteSpace($ApiRevision)) {
+    if ($env:AZURE_APIM_API_REVISION) {
+        $ApiRevision = $env:AZURE_APIM_API_REVISION
+    } else {
+        throw "ApiRevision is required but was not provided and AZURE_APIM_API_REVISION is not set."
+    }
+}
+
+Write-Output "Using EnvironmentName: $EnvironmentName"
+Write-Output "Using ApiRevision: $ApiRevision"
