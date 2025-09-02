@@ -1,33 +1,11 @@
-param (
-    [Parameter(Mandatory = $false)]
-    [string]$EnvironmentName,
-
-    [Parameter(Mandatory = $false)]
-    [string]$ApiRevision,
-
-    [Parameter(Mandatory = $false)]
-    [string]$ClientId,
-
-    [Parameter(Mandatory = $false)]
-    [string]$ClientSecret
-)
-
-# Validation and fallback to environment variables
-if (-not $EnvironmentName -or [string]::IsNullOrWhiteSpace($EnvironmentName)) {
-    if ($env:AZURE_APIM_ENVIRONMENT_NAME) {
-        $EnvironmentName = $env:AZURE_APIM_ENVIRONMENT_NAME
-    } else {
-        throw "EnvironmentName is required but was not provided and AZURE_APIM_ENVIRONMENT_NAME is not set."
-    }
+script {
+  def context = 'scripts/Apim'
+  def df      = 'Dockerfile-apply'
+  finalImage = docker.build(
+    "be/${project}:${env.BUILD_VERSION}",
+    "-f ${context}/${df} --target ${project} " +
+    "--build-arg BUILDKIT_INLINE_CACHE=1 " +
+    "--build-arg ARTIFACTORY_NUGET=${env.ARTIFACTORY_NUGET} " +
+    "${context}" // <<< build context MUST be last
+  )
 }
-
-if (-not $ApiRevision -or [string]::IsNullOrWhiteSpace($ApiRevision)) {
-    if ($env:AZURE_APIM_API_REVISION) {
-        $ApiRevision = $env:AZURE_APIM_API_REVISION
-    } else {
-        throw "ApiRevision is required but was not provided and AZURE_APIM_API_REVISION is not set."
-    }
-}
-
-Write-Output "Using EnvironmentName: $EnvironmentName"
-Write-Output "Using ApiRevision: $ApiRevision"
