@@ -1,11 +1,22 @@
-script {
-  def context = 'scripts/Apim'
-  def df      = 'Dockerfile-apply'
-  finalImage = docker.build(
-    "be/${project}:${env.BUILD_VERSION}",
-    "-f ${context}/${df} --target ${project} " +
-    "--build-arg BUILDKIT_INLINE_CACHE=1 " +
-    "--build-arg ARTIFACTORY_NUGET=${env.ARTIFACTORY_NUGET} " +
-    "${context}" // <<< build context MUST be last
-  )
-}
+# 1. Swagger File Setup
+
+## Location
+The original Swagger file (`swagger.yaml`) is stored in the **APIM folder**.  
+
+## Build Integration
+During build, the Swagger file is copied into the API project using the `<Content>` directive in the `.csproj`.  
+This ensures it is available in the publish output under:
+
+wwwroot\v1\swagger.yaml
+
+r
+Копировать код
+
+## Example `.csproj` Configuration
+```xml
+<ItemGroup>
+  <Content Include="..\scripts\APIM\Configuration\Shared\Swagger\swagger.yaml">
+    <Link>wwwroot\v1\swagger.yaml</Link>
+    <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+  </Content>
+</ItemGroup>
