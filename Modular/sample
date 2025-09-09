@@ -1,89 +1,10 @@
-h2. 2. API Deployment (Custom Approach)
-
-Terraform is not well-suited for managing APIs, policies, or revisions due to state management complexity.
-For this reason, we use a custom deployment approach based on Azure PowerShell scripts.
-
-The scripts handle:
-
-Creating APIs
-
-Creating revisions
-
-Updating policies
-
-Disabling product subscription requirement
-
-Creating named values
-
-h2. 3. Multi-Environment Setup
-
-We use a shared APIM instance per environment tier (DEV, UAT).
-
-DEV contains: dev, dev2, dev3
-
-UAT contains: uat1, uat2, uat3
-
-Instead of creating a dedicated APIM per sub-environment, each sub-environment is represented by a separate API with the corresponding suffix (e.g., -dev2, -dev3).
-
-h2. 4. Repository Structure
-
-The application repository contains a folder scripts/APIM with the following layout:
-
-Environments/ → configuration files per environment (resource group, subscription ID, backend ID, product ID, rate-limit policies, etc.)
-
-Shared/ → shared assets such as common policies (auth, rate limiting)
-
-Swagger/ → API Swagger definition
-
-deploy-apim.ps1 + functions.ps1 → main deployment scripts
-
-Dockerfile-apply → builds a container image with all scripts and configuration included
-
-h2. 5. CI: Jenkins
-
-For CI, we extend the existing Jenkins pipelines.
-
-Jenkins builds the Docker image using Dockerfile-apply.
-
-The image contains the APIM deployment scripts and configuration.
-
-Jenkins pushes the built image into Artifactory.
-
-No new tooling is introduced; the process reuses the existing CI pipeline design.
-
-h2. 6. CD: Harness
-
-For CD, Harness is used to run the deployment image.
-
-Harness pulls the image from Artifactory.
-
-The image is executed as a Kubernetes Job.
-
-Inside the container, Azure PowerShell scripts apply changes to APIM.
-
-h3. Secrets Management
-
-Harness is connected to HashiCorp Vault (managed externally).
-We retrieve environment-specific secrets using nested Harness expressions.
-
-This allows us to:
-
-Use different Vault paths per environment (dev, uat).
-
-Keep a single pipeline flexible across environments.
-
-Override Vault suffixes per service in Harness configuration.
-
-h2. 7. Summary
-
-Stable APIM resources are managed with Terraform.
-
-APIs, revisions, policies, and named values are deployed via custom PowerShell scripts.
-
-Jenkins handles CI by building and publishing deployment images.
-
-Harness handles CD by running the images as Kubernetes Jobs.
-
-Vault provides secret management per environment.
-
-This approach keeps APIM deployments flexible, environment-aware, and integrated with the existing CI/CD ecosystem.
+<choose>
+  <when condition='@(
+    !context.Variables.ContainsKey("jwtPayloadJson") ||
+    string.IsNullOrEmpty(context.Variables["jwtPayloadJson"] as string)
+  )'>
+    <return-response>
+      <set-status code="401" reason="Unauthorized" />
+    </return-response>
+  </when>
+</choose>
