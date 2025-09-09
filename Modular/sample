@@ -1,13 +1,66 @@
-  <!-- match APIM headers -->
-  <set-header name="apim-trace-id" exists-action="override">
-    <value>@(context.RequestId)</value>
-  </set-header>
-  <set-header name="ocp-apim-apiid" exists-action="override">
-    <value>@(context.Api?.Id)</value>
-  </set-header>
-  <set-header name="ocp-apim-operationid" exists-action="override">
-    <value>@(context.Operation?.Id)</value>
-  </set-header>
-  <set-header name="ocp-apim-subscriptionid" exists-action="override">
-    <value>@(context.Subscription?.Id ?? "master")</value>
-  </set-header>
+h1. APIM Local Development
+
+h2. Prerequisites
+Install (or update) the Azure PowerShell modules:
+{code:language=powershell}
+Install-Module -Name Az.Accounts -Force
+Install-Module -Name Az.ApiManagement -Force
+{code}
+
+h2. Purpose
+deploy-apim.ps1 automates the management of APIs inside Azure API Management.
+This is intentionally separate from Terraform so frequently changing components (Swagger definitions, policies, revisions, named values) can be deployed quickly and independently.
+
+h2. Structure
+
+deploy-apim.ps1 – main script for deploying/updating an API in APIM.
+
+functions.ps1 – helper functions used by the main script.
+
+Configuration/Environments/*.json – environment-specific settings (resource group, APIM name, subscription/tenant, backend/product IDs, CORS, rate-limit groups, etc.).
+
+Shared/Policies/api-shared-policy.xml – common APIM policy (auth checks, rate limiting, etc.).
+
+Swagger/swagger.yaml – the OpenAPI specification used to import/update the API.
+
+h2. How It Works
+The script performs:
+
+Upsert of the API (create or update) in APIM using environment settings.
+
+Creation of revisions when needed.
+
+Upload/update of policies and Swagger.
+
+Creation/update of named values.
+
+Optional association with a product and disabling of subscription requirement (when configured).
+
+h2. How to Use
+
+h3. Locally (Authenticated Azure Account)
+Runs using your local Az login (no service principal; ignores env vars).
+{code:language=powershell}
+./deploy-apim.ps1 -EnvironmentName "yourEnvironmentName"
+-ApiRevision "rev-123" `
+-UseLocalAccountAsServicePrincipal
+{code}
+If you’re not logged in, the script will prompt for interactive/device login on first run.
+
+h3. Using Service Principal Authentication
+Use explicit credentials (or rely on CI/CD env vars: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET).
+{code:language=powershell}
+./deploy-apim.ps1 -EnvironmentName "yourEnvironmentName"
+-ApiRevision "rev-123" -ClientId "<client-id>"
+-ClientSecret "<client-secret>"
+{code}
+
+h2. Notes
+
+EnvironmentName must match a JSON file in Configuration/Environments (e.g., dev.json, dev2.json, apiscevs.json).
+
+For local experimentation, create your own env file to avoid impacting shared DEV APIs.
+
+Tested with PowerShell 7.5.2+ (also works in Windows Terminal).
+
+In CI: Jenkins builds a Docker image (containing scripts + config) and publishes it; Harness pulls the image and runs it as a Kubernetes Job to apply changes to APIM.
