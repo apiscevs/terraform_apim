@@ -1,12 +1,13 @@
-<return-response>
-  <set-status code="401" reason="Unauthorized" />
-  <set-header name="Content-Type" exists-action="override">
-    <value>application/json</value>
+  <!-- match APIM headers -->
+  <set-header name="apim-trace-id" exists-action="override">
+    <value>@(context.RequestId)</value>
   </set-header>
-  <set-body><![CDATA[
-{
-  "statusCode": 401,
-  "message": "Invalid JWT."
-}
-]]></set-body>
-</return-response>
+  <set-header name="ocp-apim-apiid" exists-action="override">
+    <value>@(context.Api?.Id)</value>
+  </set-header>
+  <set-header name="ocp-apim-operationid" exists-action="override">
+    <value>@(context.Operation?.Id)</value>
+  </set-header>
+  <set-header name="ocp-apim-subscriptionid" exists-action="override">
+    <value>@(context.Subscription?.Id ?? "master")</value>
+  </set-header>
