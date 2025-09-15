@@ -1,23 +1,37 @@
-<!-- Normalize path: replace numeric or GUID segments with {id} (no regex) -->
+<!-- Normalize path: replace numeric or GUID segments with {id} -->
 <set-variable name="rl.path" value="@{
     var p = context.Request.Url.Path.ToLower();
 
     // strip query
-    var q = p.IndexOf('?'); if (q >= 0) p = p.Substring(0, q);
+    var q = p.IndexOf('?');
+    if (q >= 0) p = p.Substring(0, q);
 
-    var parts = p.Split(new[]{'/'}, StringSplitOptions.RemoveEmptyEntries);
+    // split safely (no shorthand array initializers)
+    var parts = p.Split(new char[] {'/'}, StringSplitOptions.RemoveEmptyEntries);
 
     for (int i = 0; i < parts.Length; i++)
     {
         var s = parts[i];
 
-        // treat as ID if it's all digits OR a GUID
-        ulong tmp; System.Guid g;
-        var isDigits = !string.IsNullOrEmpty(s) && s.All(char.IsDigit);
-        var isGuid   = System.Guid.TryParse(s, out g);
+        // digits-only check (no LINQ)
+        bool isDigits = true;
+        if (string.IsNullOrEmpty(s)) { isDigits = false; }
+        else
+        {
+            for (int j = 0; j < s.Length; j++)
+            {
+                if (!char.IsDigit(s[j])) { isDigits = false; break; }
+            }
+        }
+
+        // GUID check
+        System.Guid g;
+        bool isGuid = System.Guid.TryParse(s, out g);
 
         if (isDigits || isGuid)
+        {
             parts[i] = "{id}";
+        }
     }
 
     return "/" + string.Join("/", parts);
