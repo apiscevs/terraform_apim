@@ -1,36 +1,56 @@
-<!-- Keys used for rate limit lookup -->
-<set-variable name="req.method" value="@(context.Request.Method)" />
-<set-variable name="req.path"   value="@((string)context.Request.Url.Path.ToLower())" />
-<set-variable name="rl.lookupKey" value="@($"rl:grp:{context.Variables["req.method"]}:{context.Variables["req.path"]}")" />
+<!-- Build a versioned cache key -->
+<set-variable name="rl.rev" value="@((string)(context.Api?.Revision ?? "r1"))" />
+<set-variable name="rl.key" value="@($"rl:grp:{context.Variables["rl.rev"]}:{context.Request.Method}:{context.Request.Url.Path.ToLower()}")" />
 
-<!-- 1) Try to get pre-resolved group from cache -->
-<cache-lookup-value key="@((string)context.Variables["rl.lookupKey"])" 
-                    variable-name="selectedGroup" />
+<!-- 1) Try cache -->
+<cache-lookup-value key="@((string)context.Variables["rl.key"])" variable-name="rl.packed" />
 
 <choose>
-  <when condition="@(!context.Variables.ContainsKey("selectedGroup"))">
-    <!-- 2) Miss: parse JSON and resolve once -->
-    <set-variable name="jsonConfig" value="@(
-        Newtonsoft.Json.Linq.JObject.Parse((string)context.Variables["rateLimitConfig"]))" />
+  <when condition='@string.IsNullOrEmpty((string)context.Variables["rl.packed"])'>
+    <!-- 2) Miss: parse config once and resolve the group -->
+    <set-variable name="jsonCfg" value="@(
+        Newtonsoft.Json.Linq.JObject.Parse((string)context.Variables["rateLimitConfig"])
+    )" />
     <set-variable name="selectedGroup" value="@{
-        var cfg = (Newtonsoft.Json.Linq.JObject)context.Variables["jsonConfig"];
-        var method = (string)context.Variables["req.method"];
-        var path   = (string)context.Variables["req.path"];
+        var cfg   = (Newtonsoft.Json.Linq.JObject)context.Variables["jsonCfg"];
+        var m     = context.Request.Method;
+        var p     = context.Request.Url.Path.ToLower();
         var groups = (Newtonsoft.Json.Linq.JArray)cfg.SelectToken("groups");
-        var grp = groups.FirstOrDefault(g => 
-                   string.Equals((string)g["apis"][0]?["method"], method, StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals((string)g["apis"][0]?["route"],  path,   StringComparison.OrdinalIgnoreCase))
-                 ?? (Newtonsoft.Json.Linq.JObject)cfg.SelectToken("default");
+        var grp = groups.FirstOrDefault(g =>
+        {
+            // Simple matcher — adapt if you need multiple apis per group
+            var apis = (Newtonsoft.Json.Linq.JArray)g["apis"];
+            return apis.Any(a =>
+                string.Equals((string)a["method"], m, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(((string)a["route"])?.ToLower(), p, StringComparison.Ordinal));
+        }) ?? (Newtonsoft.Json.Linq.JObject)cfg.SelectToken("default");
         return grp;
     }" />
-    <!-- 3) Store the resolved group for next calls -->
-    <cache-store-value key="@((string)context.Variables["rl.lookupKey"])" 
-                       value="@(context.Variables["selectedGroup"])" 
-                       duration="300" />  <!-- 5 minutes; bump on config change -->
+
+    <!-- Pack: calls|period|name -->
+    <set-variable name="rl.packed" value="@{
+        var g = (Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"];
+        var calls  = g.Value<int>("callAmount");
+        var period = g.Value<int>("renewalPeriod");
+        var name   = g.Value<string>("name") ?? "DefaultGroup";
+        return $"{calls}|{period}|{name}";
+    }" />
+
+    <!-- Store for 60s (and key contains revision, so deploys bust it) -->
+    <cache-store-value key="@((string)context.Variables["rl.key"])"
+                       value="@((string)context.Variables["rl.packed"])"
+                       duration="60" />
   </when>
 </choose>
 
-<!-- Then read values without reparsing -->
-<set-variable name="rateLimitCalls"          value="@(((Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"]).Value<int>("callAmount"))" />
-<set-variable name="rateLimitRenewalPeriod"  value="@(((Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"]).Value<int>("renewalPeriod"))" />
-<set-variable name="groupName"               value="@(((Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"]).Value<string>("name"))" />
+<!-- 3) Unpack once, no JObject on hot path -->
+<set-variable name="rl.parts" value="@(((string)context.Variables["rl.packed"]).Split('|'))" />
+<set-variable name="rateLimitCalls"         value="@int.Parse(((string[])context.Variables["rl.parts"])[0])" />
+<set-variable name="rateLimitRenewalPeriod" value="@int.Parse(((string[])context.Variables["rl.parts"])[1])" />
+<set-variable name="groupName"              value="@(((string[])context.Variables["rl.parts"])[2])" />
+
+<!-- Use them -->
+<rate-limit-by-key
+  calls="@((int)context.Variables["rateLimitCalls"])"
+  renewal-period="@((int)context.Variables["rateLimitRenewalPeriod"])"
+  counter-key="@($"{(string)context.Variables["tokenIssuer"] ?? "iss"}:{(string)context.Variables["tokenSub"] ?? "sub"}:{(string)context.Variables["groupName"]}")" />
