@@ -1,33 +1,36 @@
-<policies>
-  <inbound>
-    <base />
-    <!-- normal policies (JWT, rate-limit, etc.) -->
+<!-- Keys used for rate limit lookup -->
+<set-variable name="req.method" value="@(context.Request.Method)" />
+<set-variable name="req.path"   value="@((string)context.Request.Url.Path.ToLower())" />
+<set-variable name="rl.lookupKey" value="@($"rl:grp:{context.Variables["req.method"]}:{context.Variables["req.path"]}")" />
 
-    <choose>
-      <!-- MOCK path -->
-      <when condition='@((context.Request.Headers.GetValueOrDefault("X-Mock","false")) == "true")'>
-        <return-response>
-          <set-status code="200" reason="OK" />
-          <set-header name="Content-Type" exists-action="override">
-            <value>application/json; charset=utf-8</value>
-          </set-header>
-          <set-body>@{
-              var body = new { ok = true, source = "apim-mock" };
-              return Newtonsoft.Json.JsonConvert.SerializeObject(body);
-          }</set-body>
-        </return-response>
-      </when>
+<!-- 1) Try to get pre-resolved group from cache -->
+<cache-lookup-value key="@((string)context.Variables["rl.lookupKey"])" 
+                    variable-name="selectedGroup" />
 
-      <!-- REAL backend path -->
-      <otherwise>
-        <set-backend-service backend-id="apiscevs-backend" />
-      </otherwise>
-    </choose>
-  </inbound>
+<choose>
+  <when condition="@(!context.Variables.ContainsKey("selectedGroup"))">
+    <!-- 2) Miss: parse JSON and resolve once -->
+    <set-variable name="jsonConfig" value="@(
+        Newtonsoft.Json.Linq.JObject.Parse((string)context.Variables["rateLimitConfig"]))" />
+    <set-variable name="selectedGroup" value="@{
+        var cfg = (Newtonsoft.Json.Linq.JObject)context.Variables["jsonConfig"];
+        var method = (string)context.Variables["req.method"];
+        var path   = (string)context.Variables["req.path"];
+        var groups = (Newtonsoft.Json.Linq.JArray)cfg.SelectToken("groups");
+        var grp = groups.FirstOrDefault(g => 
+                   string.Equals((string)g["apis"][0]?["method"], method, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals((string)g["apis"][0]?["route"],  path,   StringComparison.OrdinalIgnoreCase))
+                 ?? (Newtonsoft.Json.Linq.JObject)cfg.SelectToken("default");
+        return grp;
+    }" />
+    <!-- 3) Store the resolved group for next calls -->
+    <cache-store-value key="@((string)context.Variables["rl.lookupKey"])" 
+                       value="@(context.Variables["selectedGroup"])" 
+                       duration="300" />  <!-- 5 minutes; bump on config change -->
+  </when>
+</choose>
 
-  <backend><base /></backend>
-  <outbound><base /></outbound>
-  <on-error><base /></on-error>
-</policies>
-
-
+<!-- Then read values without reparsing -->
+<set-variable name="rateLimitCalls"          value="@(((Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"]).Value<int>("callAmount"))" />
+<set-variable name="rateLimitRenewalPeriod"  value="@(((Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"]).Value<int>("renewalPeriod"))" />
+<set-variable name="groupName"               value="@(((Newtonsoft.Json.Linq.JObject)context.Variables["selectedGroup"]).Value<string>("name"))" />
