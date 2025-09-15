@@ -1,45 +1,25 @@
-<set-variable name="rl.path" value="@{
-    var p = context.Request.Url.Path.ToLower();
+# APIM Throughput — Findings (short)
 
-    var q = p.IndexOf('?');
-    if (q >= 0)
-    {
-        p = p.Substring(0, q);
-    }
+We load‑tested our APIM policy on the **Developer** tier by hammering a single endpoint with **JMeter (500 VUs)**. The backend was mocked in APIM (`return-response`), so the gateway/policies were the only moving parts. The policy validates a multi‑tenant JWT on every request and applies a JSON‑driven rate limit per route/method.
 
-    var parts = p.Split(new char[] {'/'}, System.StringSplitOptions.RemoveEmptyEntries);
+### Results
 
-    for (int i = 0; i < parts.Length; i++)
-    {
-        var s = parts[i];
+* **Full policy (JWT + rate limit): \~260 r/s**
+* **JWT only (rate limit off): \~295 r/s**  → \~+13%
+* **No JWT, no rate limit:** **\~380 r/s** → \~+46% vs full
 
-        // digits-only check (no LINQ)
-        bool isDigits = true;
-        if (string.IsNullOrEmpty(s))
-        {
-            isDigits = false;
-        }
-        else
-        {
-            for (int j = 0; j < s.Length; j++)
-            {
-                if (!char.IsDigit(s[j]))
-                {
-                    isDigits = false;
-                    break;
-                }
-            }
-        }
+### What we learned
 
-        // GUID check
-        System.Guid g;
-        bool isGuid = System.Guid.TryParse(s, out g);
+* **JWT validation is the main bottleneck.** It sets the ceiling on RPS.
+* **Rate limiting adds a bit of overhead**, but it’s small next to JWT.
+* Caching the route→group lookup (and normalizing paths) is **clean and correct**, but doesn’t materially change throughput under load.
+* APIM **Capacity** is a composite “how busy” index. Managed APIM doesn’t expose raw CPU/RAM; Capacity + Gateway vs Backend latency are the useful signals here.
 
-        if (isDigits || isGuid)
-        {
-            parts[i] = "{id}";
-        }
-    }
+### Test setup (for posterity)
 
-    return "/" + string.Join("/", parts);
-}" />
+* Tier: **APIM Developer** (single unit)
+* Tool: **JMeter**, 500 virtual users, steady spam of one endpoint
+* Backend: **mocked in APIM** to isolate gateway cost
+* Policy bits: **`validate-jwt` every request**, custom **rate limit** (per route/method), route→group **cache** keyed by **revision + method + normalized path** (`calls|period|name` packed string)
+
+That’s the gist: if we keep JWT validation in APIM for every call, micro‑optimizations won’t move the needle; higher RPS needs backend JWT or a bigger tier.
