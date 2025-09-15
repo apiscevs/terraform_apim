@@ -1,4 +1,4 @@
-<!-- Normalize path: replace ID-like segments with {id} -->
+<!-- Normalize path: replace numeric or GUID segments with {id} (no regex) -->
 <set-variable name="rl.path" value="@{
     var p = context.Request.Url.Path.ToLower();
 
@@ -11,14 +11,13 @@
     {
         var s = parts[i];
 
-        // digits-only OR GUID -> treat as an ID
-        if (System.Text.RegularExpressions.Regex.IsMatch(
-                s,
-                @"^(?:\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-        {
+        // treat as ID if it's all digits OR a GUID
+        ulong tmp; System.Guid g;
+        var isDigits = !string.IsNullOrEmpty(s) && s.All(char.IsDigit);
+        var isGuid   = System.Guid.TryParse(s, out g);
+
+        if (isDigits || isGuid)
             parts[i] = "{id}";
-        }
     }
 
     return "/" + string.Join("/", parts);
