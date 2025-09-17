@@ -1,25 +1,68 @@
-# APIM Throughput — Findings (short)
+// nowUtc: DateTimeOffset.UtcNow (or fixed in tests)
+// rollOverUtc: TimeSpan from your GetMarketRolloverTimeAsync() (TimeOnly.ToTimeSpan() if needed)
+private static (DateTimeOffset startCurrent, DateTimeOffset startNext)
+GetAnchors(DateTimeOffset nowUtc, TimeSpan rollOverUtc)
+{
+    var todayRoll = nowUtc.Date + rollOverUtc;          // “today at rollover”
+    var startCurrent = nowUtc >= todayRoll ? todayRoll   // started today at rollover
+                                           : todayRoll.AddDays(-1); // or yesterday at rollover
+    var startNext = startCurrent.AddDays(1);
+    return (startCurrent, startNext);
+}
+2) Build the predicate for your enum
+csharp
+Копировать код
+public static Expression<Func<SubmittedOrderMetaData, bool>> BuildDateRangePredicate(
+    DateRange range,
+    TimeSpan rollOverUtc,
+    DateTimeOffset? nowUtcOverride = null)
+{
+    var nowUtc = nowUtcOverride ?? DateTimeOffset.UtcNow;
+    var (startCurrent, startNext) = GetAnchors(nowUtc, rollOverUtc);
 
-We load‑tested our APIM policy on the **Developer** tier by hammering a single endpoint with **JMeter (500 VUs)**. The backend was mocked in APIM (`return-response`), so the gateway/policies were the only moving parts. The policy validates a multi‑tenant JWT on every request and applies a JSON‑driven rate limit per route/method.
+    DateTimeOffset start, end;
 
-### Results
+    switch (range)
+    {
+        case DateRange.Today:
+            start = startCurrent;
+            end   = startNext;
+            break;
 
-* **Full policy (JWT + rate limit): \~260 r/s**
-* **JWT only (rate limit off): \~295 r/s**  → \~+13%
-* **No JWT, no rate limit:** **\~380 r/s** → \~+46% vs full
+        case DateRange.Yesterday:
+            start = startCurrent.AddDays(-1);
+            end   = startCurrent;
+            break;
 
-### What we learned
+        case DateRange.LastSevenDays:
+            // Last 7 “custom days” including the current one
+            start = startCurrent.AddDays(-7);
+            end   = startNext;
+            break;
 
-* **JWT validation is the main bottleneck.** It sets the ceiling on RPS.
-* **Rate limiting adds a bit of overhead**, but it’s small next to JWT.
-* Caching the route→group lookup (and normalizing paths) is **clean and correct**, but doesn’t materially change throughput under load.
-* APIM **Capacity** is a composite “how busy” index. Managed APIM doesn’t expose raw CPU/RAM; Capacity + Gateway vs Backend latency are the useful signals here.
+        case DateRange.LastThirtyDays:
+            start = startCurrent.AddDays(-30);
+            end   = startNext;
+            break;
 
-### Test setup (for posterity)
+        default:
+            return x => true; // no filter
+    }
 
-* Tier: **APIM Developer** (single unit)
-* Tool: **JMeter**, 500 virtual users, steady spam of one endpoint
-* Backend: **mocked in APIM** to isolate gateway cost
-* Policy bits: **`validate-jwt` every request**, custom **rate limit** (per route/method), route→group **cache** keyed by **revision + method + normalized path** (`calls|period|name` packed string)
+    // If your column is DateTime (UTC), use DateTime instead of DateTimeOffset here.
+    return x => x.SubmittedTime >= start && x.SubmittedTime < end;
+}
+3) Use with LinqKit / your repo
+csharp
+Копировать код
+var rollOverTime = await _marketTimeService.GetMarketRolloverTimeAsync(); // TimeOnly/TimeSpan in UTC
+TimeSpan rollOverUtc = rollOverTime is TimeOnly ro ? ro.ToTimeSpan() : (TimeSpan)rollOverTime;
 
-That’s the gist: if we keep JWT validation in APIM for every call, micro‑optimizations won’t move the needle; higher RPS needs backend JWT or a bigger tier.
+var datePred = BuildDateRangePredicate(dateRange, rollOverUtc);
+
+var predicate = PredicateBuilder.New<SubmittedOrderMetaData>(true)
+    .And(t => t.PartyPlatformId == partyPlatformId)
+    .And(datePred);
+
+// EF Core example (note AsExpandable if you use LinqKit):
+var query = db.Set<SubmittedOrderMetaData>().AsExpandable().Where(predicate);
