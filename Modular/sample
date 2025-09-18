@@ -1,68 +1,130 @@
-// nowUtc: DateTimeOffset.UtcNow (or fixed in tests)
-// rollOverUtc: TimeSpan from your GetMarketRolloverTimeAsync() (TimeOnly.ToTimeSpan() if needed)
-private static (DateTimeOffset startCurrent, DateTimeOffset startNext)
-GetAnchors(DateTimeOffset nowUtc, TimeSpan rollOverUtc)
-{
-    var todayRoll = nowUtc.Date + rollOverUtc;          // “today at rollover”
-    var startCurrent = nowUtc >= todayRoll ? todayRoll   // started today at rollover
-                                           : todayRoll.AddDays(-1); // or yesterday at rollover
-    var startNext = startCurrent.AddDays(1);
-    return (startCurrent, startNext);
-}
-2) Build the predicate for your enum
-csharp
-Копировать код
-public static Expression<Func<SubmittedOrderMetaData, bool>> BuildDateRangePredicate(
-    DateRange range,
-    TimeSpan rollOverUtc,
-    DateTimeOffset? nowUtcOverride = null)
-{
-    var nowUtc = nowUtcOverride ?? DateTimeOffset.UtcNow;
-    var (startCurrent, startNext) = GetAnchors(nowUtc, rollOverUtc);
+using System;
+using System.Linq;
+using System.Linq.Expressions;
 
-    DateTimeOffset start, end;
-
-    switch (range)
+namespace YourApp.Filters
+{
+    public enum DateRange
     {
-        case DateRange.Today:
-            start = startCurrent;
-            end   = startNext;
-            break;
-
-        case DateRange.Yesterday:
-            start = startCurrent.AddDays(-1);
-            end   = startCurrent;
-            break;
-
-        case DateRange.LastSevenDays:
-            // Last 7 “custom days” including the current one
-            start = startCurrent.AddDays(-7);
-            end   = startNext;
-            break;
-
-        case DateRange.LastThirtyDays:
-            start = startCurrent.AddDays(-30);
-            end   = startNext;
-            break;
-
-        default:
-            return x => true; // no filter
+        None = 0,
+        Today,
+        Yesterday,
+        LastSevenDays,
+        LastThirtyDays
     }
 
-    // If your column is DateTime (UTC), use DateTime instead of DateTimeOffset here.
-    return x => x.SubmittedTime >= start && x.SubmittedTime < end;
+    /// <summary>
+    /// Computes [start, end) windows using a custom UTC rollover time.
+    /// </summary>
+    public static class BusinessDayWindows
+    {
+        /// <summary>
+        /// Returns the [start, end) window for the given DateRange.
+        /// All values are UTC; weekends included.
+        /// </summary>
+        public static (DateTime startUtc, DateTime endUtc) GetWindow(DateRange range, TimeOnly rollOverUtc)
+        {
+            if (range == DateRange.None)
+                return (DateTime.MinValue, DateTime.MaxValue);
+
+            var now = DateTime.UtcNow;
+            var todayRoll = now.Date.Add(rollOverUtc.ToTimeSpan());
+
+            var startCurrent = now >= todayRoll ? todayRoll : todayRoll.AddDays(-1);
+            var startNext    = startCurrent.AddDays(1);
+
+            return range switch
+            {
+                DateRange.Today          => (startCurrent,               startNext),
+                DateRange.Yesterday      => (startCurrent.AddDays(-1),   startCurrent),
+                DateRange.LastSevenDays  => (startCurrent.AddDays(-7),   startNext),
+                DateRange.LastThirtyDays => (startCurrent.AddDays(-30),  startNext),
+                _                        => (DateTime.MinValue, DateTime.MaxValue)
+            };
+        }
+    }
+
+    /// <summary>
+    /// Composable, EF-translatable predicate builders for [start, end).
+    /// Works with any model and any DateTime/DateTimeOffset property selector.
+    /// </summary>
+    public static class DateRangePredicates
+    {
+        // -------- DateTime (UTC) ----------
+        public static Expression<Func<T, bool>> BetweenUtc<T>(
+            Expression<Func<T, DateTime>> utcSelector,
+            DateTime startUtc,
+            DateTime endUtc)
+        {
+            var param = Expression.Parameter(typeof(T), "x");
+            var body  = ReplaceParameter(utcSelector, param); // x => utcSelector(x)
+
+            var ge = Expression.GreaterThanOrEqual(body, Expression.Constant(startUtc, typeof(DateTime)));
+            var lt = Expression.LessThan(body,           Expression.Constant(endUtc,   typeof(DateTime)));
+            var and = Expression.AndAlso(ge, lt);
+
+            return Expression.Lambda<Func<T, bool>>(and, param);
+        }
+
+        public static IQueryable<T> ApplyDateRangeUtc<T>(
+            this IQueryable<T> query,
+            Expression<Func<T, DateTime>> utcSelector,
+            DateRange range,
+            TimeOnly rollOverUtc)
+        {
+            if (range == DateRange.None) return query;
+
+            var (start, end) = BusinessDayWindows.GetWindow(range, rollOverUtc);
+            return query.Where(BetweenUtc(utcSelector, start, end));
+        }
+
+        // -------- DateTimeOffset (UTC) ----------
+        public static Expression<Func<T, bool>> BetweenOffsetUtc<T>(
+            Expression<Func<T, DateTimeOffset>> utcOffsetSelector,
+            DateTimeOffset startUtc,
+            DateTimeOffset endUtc)
+        {
+            var param = Expression.Parameter(typeof(T), "x");
+            var body  = ReplaceParameter(utcOffsetSelector, param);
+
+            var ge = Expression.GreaterThanOrEqual(body, Expression.Constant(startUtc, typeof(DateTimeOffset)));
+            var lt = Expression.LessThan(body,           Expression.Constant(endUtc,   typeof(DateTimeOffset)));
+            var and = Expression.AndAlso(ge, lt);
+
+            return Expression.Lambda<Func<T, bool>>(and, param);
+        }
+
+        public static IQueryable<T> ApplyDateRangeOffsetUtc<T>(
+            this IQueryable<T> query,
+            Expression<Func<T, DateTimeOffset>> utcOffsetSelector,
+            DateRange range,
+            TimeOnly rollOverUtc)
+        {
+            if (range == DateRange.None) return query;
+
+            var (start, end) = BusinessDayWindows.GetWindow(range, rollOverUtc);
+            return query.Where(BetweenOffsetUtc(utcOffsetSelector, start, end));
+        }
+
+        // ---- small helper to rebind selector parameter to our "x" ----
+        private static Expression ReplaceParameter(LambdaExpression selector, ParameterExpression newParam)
+        {
+            var replacer = new ParameterReplacer(selector.Parameters[0], newParam);
+            return replacer.Visit(selector.Body)!;
+        }
+
+        private sealed class ParameterReplacer : ExpressionVisitor
+        {
+            private readonly ParameterExpression _from;
+            private readonly ParameterExpression _to;
+
+            public ParameterReplacer(ParameterExpression from, ParameterExpression to)
+            {
+                _from = from; _to = to;
+            }
+
+            protected override Expression VisitParameter(ParameterExpression node)
+                => node == _from ? _to : base.VisitParameter(node);
+        }
+    }
 }
-3) Use with LinqKit / your repo
-csharp
-Копировать код
-var rollOverTime = await _marketTimeService.GetMarketRolloverTimeAsync(); // TimeOnly/TimeSpan in UTC
-TimeSpan rollOverUtc = rollOverTime is TimeOnly ro ? ro.ToTimeSpan() : (TimeSpan)rollOverTime;
-
-var datePred = BuildDateRangePredicate(dateRange, rollOverUtc);
-
-var predicate = PredicateBuilder.New<SubmittedOrderMetaData>(true)
-    .And(t => t.PartyPlatformId == partyPlatformId)
-    .And(datePred);
-
-// EF Core example (note AsExpandable if you use LinqKit):
-var query = db.Set<SubmittedOrderMetaData>().AsExpandable().Where(predicate);
