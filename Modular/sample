@@ -1,87 +1,92 @@
 using System;
 using Xunit;
 
-public class BusinessDayWindowsTests
+public class DateRangeTests
 {
-    private static readonly TimeOnly Rollover16 = new(16, 0); // 16:00Z
+    private static readonly TimeOnly RolloverTime = new(hour: 16, minute: 0); // 16:00 UTC
 
     [Fact]
-    public void Today_AfterRollover_AnchorsToTodayAtRollover()
+    public void Today_AfterRollover_ReturnsCurrentWindow()
     {
-        var now = new DateTime(2025, 9, 17, 17, 00, 00, DateTimeKind.Utc);
+        var now = new DateTime(year: 2025, month: 9, day: 17, hour: 17, minute: 00, second: 00, DateTimeKind.Utc);
 
-        var (start, end) = BusinessDayWindows.GetDateRangeWindowUtc(DateRange.Today, Rollover16, now);
+        var (start, end) = Util.GetDateRange(DateRange.Today, rollOverUtc: RolloverTime, now);
 
-        Assert.Equal(new DateTime(2025, 9, 17, 16, 00, 00, DateTimeKind.Utc), start);
-        Assert.Equal(new DateTime(2025, 9, 18, 16, 00, 00, DateTimeKind.Utc), end);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 17, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), start);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 18, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), end);
+        Assert.Equal(TimeSpan.FromDays(1), end - start);
     }
 
     [Fact]
-    public void Today_BeforeRollover_AnchorsToYesterdayAtRollover()
+    public void Today_BeforeRollover_ReturnsPreviousWindow()
     {
-        var now = new DateTime(2025, 9, 17, 15, 59, 59, DateTimeKind.Utc);
+        var now = new DateTime(year: 2025, month: 9, day: 17, hour: 15, minute: 59, second: 59, DateTimeKind.Utc);
 
-        var (start, end) = BusinessDayWindows.GetDateRangeWindowUtc(DateRange.Today, Rollover16, now);
+        var (start, end) = Util.GetDateRange(DateRange.Today, rollOverUtc: RolloverTime, now);
 
-        Assert.Equal(new DateTime(2025, 9, 16, 16, 00, 00, DateTimeKind.Utc), start);
-        Assert.Equal(new DateTime(2025, 9, 17, 16, 00, 00, DateTimeKind.Utc), end);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 16, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), start);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 17, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), end);
+        Assert.Equal(TimeSpan.FromDays(1), end - start);
     }
 
     [Fact]
-    public void Yesterday_AfterRollover_IsPrevCustomDay()
+    public void Yesterday_AfterRollover_ReturnsPreviousDayWindow()
     {
-        var now = new DateTime(2025, 9, 17, 17, 00, 00, DateTimeKind.Utc);
+        var now = new DateTime(year: 2025, month: 9, day: 17, hour: 17, minute: 00, second: 00, DateTimeKind.Utc);
 
-        var (start, end) = BusinessDayWindows.GetDateRangeWindowUtc(DateRange.Yesterday, Rollover16, now);
+        var (start, end) = Util.GetDateRange(DateRange.Yesterday, rollOverUtc: RolloverTime, now);
 
-        Assert.Equal(new DateTime(2025, 9, 16, 16, 00, 00, DateTimeKind.Utc), start);
-        Assert.Equal(new DateTime(2025, 9, 17, 16, 00, 00, DateTimeKind.Utc), end);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 16, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), start);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 17, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), end);
+        Assert.Equal(TimeSpan.FromDays(1), end - start);
     }
 
     [Fact]
-    public void Yesterday_BeforeRollover_IsDayBeforeYesterday()
+    public void Yesterday_BeforeRollover_ReturnsDayBeforeYesterdayWindow()
     {
-        var now = new DateTime(2025, 9, 17, 15, 59, 59, DateTimeKind.Utc);
+        var now = new DateTime(year: 2025, month: 9, day: 17, hour: 15, minute: 59, second: 59, DateTimeKind.Utc);
 
-        var (start, end) = BusinessDayWindows.GetDateRangeWindowUtc(DateRange.Yesterday, Rollover16, now);
+        var (start, end) = Util.GetDateRange(DateRange.Yesterday, rollOverUtc: RolloverTime, now);
 
-        Assert.Equal(new DateTime(2025, 9, 15, 16, 00, 00, DateTimeKind.Utc), start);
-        Assert.Equal(new DateTime(2025, 9, 16, 16, 00, 00, DateTimeKind.Utc), end);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 15, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), start);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 16, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), end);
+        Assert.Equal(TimeSpan.FromDays(1), end - start);
     }
 
     [Fact]
-    public void LastSevenDays_WindowSpans7CustomDays_EndsAtNextStart()
+    public void LastSevenDays_AfterRollover_ReturnsSevenCustomDaysEndingNextStart()
     {
-        var now = new DateTime(2025, 9, 17, 17, 00, 00, DateTimeKind.Utc);
+        var now = new DateTime(year: 2025, month: 9, day: 17, hour: 17, minute: 00, second: 00, DateTimeKind.Utc);
 
-        var (start, end) = BusinessDayWindows.GetDateRangeWindowUtc(DateRange.LastSevenDays, Rollover16, now);
+        var (start, end) = Util.GetDateRange(DateRange.LastSevenDays, rollOverUtc: RolloverTime, now);
 
-        Assert.Equal(new DateTime(2025, 9, 10, 16, 00, 00, DateTimeKind.Utc), start); // 7 days back from currentStart (17th@16 -> 10th@16)
-        Assert.Equal(new DateTime(2025, 9, 18, 16, 00, 00, DateTimeKind.Utc), end);   // nextStart
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 10, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), start);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 18, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), end);
+        Assert.Equal(TimeSpan.FromDays(8), end - start); // 7 full [start,end) custom days => 8 * 24h span to the next start
     }
 
     [Fact]
-    public void LastThirtyDays_WindowSpans30CustomDays()
+    public void LastThirtyDays_AfterRollover_ReturnsThirtyCustomDaysEndingNextStart()
     {
-        var now = new DateTime(2025, 9, 17, 17, 00, 00, DateTimeKind.Utc);
+        var now = new DateTime(year: 2025, month: 9, day: 17, hour: 17, minute: 00, second: 00, DateTimeKind.Utc);
 
-        var (start, end) = BusinessDayWindows.GetDateRangeWindowUtc(DateRange.LastThirtyDays, Rollover16, now);
+        var (start, end) = Util.GetDateRange(DateRange.LastThirtyDays, rollOverUtc: RolloverTime, now);
 
-        Assert.Equal(new DateTime(2025, 8, 18, 16, 00, 00, DateTimeKind.Utc), start);
-        Assert.Equal(new DateTime(2025, 9, 18, 16, 00, 00, DateTimeKind.Utc), end);
+        Assert.Equal(new DateTime(year: 2025, month: 8, day: 18, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), start);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 18, hour: 16, minute: 00, second: 00, DateTimeKind.Utc), end);
+        Assert.Equal(TimeSpan.FromDays(31), end - start); // 30 custom days plus current window end
     }
 
     [Fact]
-    public void Inclusivity_StartIncluded_EndExcluded()
+    public void MidnightRollover_Today_ReturnsCalendarDayWindow()
     {
-        var now = new DateTime(2025, 9, 17, 17, 00, 00, DateTimeKind.Utc);
-        var (start, end) = BusinessDayWindows.GetDateRangeWindowUtc(DateRange.Today, Rollover16, now);
+        var midnight = new TimeOnly(hour: 0, minute: 0);
+        var now = new DateTime(year: 2025, month: 9, day: 17, hour: 10, minute: 00, second: 00, DateTimeKind.Utc);
 
-        Assert.True(InRange(start.AddTicks(0), start, end));   // start included
-        Assert.False(InRange(end, start, end));                // end excluded
-        Assert.True(InRange(end.AddTicks(-1), start, end));    // just before end included
+        var (start, end) = Util.GetDateRange(DateRange.Today, rollOverUtc: midnight, now);
+
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 17, hour: 0, minute: 00, second: 00, DateTimeKind.Utc), start);
+        Assert.Equal(new DateTime(year: 2025, month: 9, day: 18, hour: 0, minute: 00, second: 00, DateTimeKind.Utc), end);
+        Assert.Equal(TimeSpan.FromDays(1), end - start);
     }
-
-    private static bool InRange(DateTime value, DateTime start, DateTime end)
-        => value >= start && value < end;
 }
