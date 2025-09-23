@@ -1,5 +1,26 @@
-Before:
-The filter used “Today” as a simple calendar day (00:00–23:59 UTC), ignoring the configured rollover time.
+public async Task ProcessNewBlobNotificationAsync(string blobName, FileMetaData fileMetaData, AtomSbRenewMessageLockDelegate messageLockRenewer)
+{
+    var dbg = _config.GetSection("DebugIngest");
+    if (dbg.GetValue<bool>("UseLocalFile"))
+    {
+        var localPath  = dbg.GetValue<string>("Path")!;
+        var localName  = dbg.GetValue<string>("FileName") ?? Path.GetFileName(localPath);
 
-Now:
-The filter respects the system rollover time. In the current setup (16:00 EST = 20:00 UTC), “Today” means orders uploaded from yesterday 16:01 UTC up to today 16:00 UTC.
+        await using var fs = new FileStream(
+            localPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 64 * 1024,
+            options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        // keep everything else the same
+        _logger.LogInformation("DEBUG: processing local file {File}", localPath);
+        await ProcessBlobAsync(fs, localName, fileMetaData, messageLockRenewer, blobContainerClient: null);
+        return; // skip cloud delete, etc.
+    }
+
+    // normal cloud path
+    var response = await blobClient.DownloadStreamingAsync();
+    await ProcessBlobAsync(response.Value.Content, fileMetaData.UploadedFileName!, fileMetaData, messageLockRenewer, blobContainerClient);
+}
