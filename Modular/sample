@@ -1,26 +1,36 @@
-public async Task ProcessNewBlobNotificationAsync(string blobName, FileMetaData fileMetaData, AtomSbRenewMessageLockDelegate messageLockRenewer)
+// Cache compiled XPath expressions (thread-safe)
+private static readonly ConcurrentDictionary<string, XPathExpression> _xpathCache = new();
+
+public static string GetValue(this XElement node, string xpath)
 {
-    var dbg = _config.GetSection("DebugIngest");
-    if (dbg.GetValue<bool>("UseLocalFile"))
+    if (node is null || string.IsNullOrEmpty(xpath))
+        return string.Empty;
+
+    // Compile once per unique xpath
+    var expr = _xpathCache.GetOrAdd(xpath, static s => XPathExpression.Compile(s));
+
+    // Evaluate without allocating lists/enumerating multiple times
+    var nav = node.CreateNavigator();
+    var result = nav.Evaluate(expr);
+
+    switch (result)
     {
-        var localPath  = dbg.GetValue<string>("Path")!;
-        var localName  = dbg.GetValue<string>("FileName") ?? Path.GetFileName(localPath);
+        case null:
+            return string.Empty;
 
-        await using var fs = new FileStream(
-            localPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            bufferSize: 64 * 1024,
-            options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+        case string s:
+            return s;
 
-        // keep everything else the same
-        _logger.LogInformation("DEBUG: processing local file {File}", localPath);
-        await ProcessBlobAsync(fs, localName, fileMetaData, messageLockRenewer, blobContainerClient: null);
-        return; // skip cloud delete, etc.
+        case XPathNodeIterator it:
+            return it.MoveNext() ? (it.Current?.Value ?? string.Empty) : string.Empty;
+
+        case double d:
+            return d.ToString(CultureInfo.InvariantCulture);
+
+        case bool b:
+            return b ? "true" : "false";
+
+        default:
+            return string.Empty;
     }
-
-    // normal cloud path
-    var response = await blobClient.DownloadStreamingAsync();
-    await ProcessBlobAsync(response.Value.Content, fileMetaData.UploadedFileName!, fileMetaData, messageLockRenewer, blobContainerClient);
 }
