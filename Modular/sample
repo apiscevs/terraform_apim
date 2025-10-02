@@ -1,36 +1,10 @@
-// Cache compiled XPath expressions (thread-safe)
-private static readonly ConcurrentDictionary<string, XPathExpression> _xpathCache = new();
-
-public static string GetValue(this XElement node, string xpath)
-{
-    if (node is null || string.IsNullOrEmpty(xpath))
-        return string.Empty;
-
-    // Compile once per unique xpath
-    var expr = _xpathCache.GetOrAdd(xpath, static s => XPathExpression.Compile(s));
-
-    // Evaluate without allocating lists/enumerating multiple times
-    var nav = node.CreateNavigator();
-    var result = nav.Evaluate(expr);
-
-    switch (result)
-    {
-        case null:
-            return string.Empty;
-
-        case string s:
-            return s;
-
-        case XPathNodeIterator it:
-            return it.MoveNext() ? (it.Current?.Value ?? string.Empty) : string.Empty;
-
-        case double d:
-            return d.ToString(CultureInfo.InvariantCulture);
-
-        case bool b:
-            return b ? "true" : "false";
-
-        default:
-            return string.Empty;
-    }
-}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: curl-tmp
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.8.0
+      command: ["sleep","3600"]
