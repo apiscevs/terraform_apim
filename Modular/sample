@@ -1,1 +1,8 @@
-test
+
+$startOut = (strmqm $QueueManager 2>&1)
+if ($LASTEXITCODE -ne 0 -and $startOut -notmatch 'already running') {
+  throw "Failed to start $QueueManager:`n$startOut"
+}
+
+# now you can run your MQSC lines
+"DIS QMGR QMNAME" | runmqsc $QueueManager
