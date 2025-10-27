@@ -1,8 +1,17 @@
+# 1) Get the MQ for Linux tarball (Developer edition is fine)
+#    (Replace the URL with the current version your team uses)
+cd /tmp
+curl -LO https://public.dhe.ibm.com/ibmdl/export/pub/software/websphere/messaging/mqadv/mqadv_dev920_ubuntu_x86-64.tar.gz
 
-$startOut = (strmqm $QueueManager 2>&1)
-if ($LASTEXITCODE -ne 0 -and $startOut -notmatch 'already running') {
-  throw "Failed to start $QueueManager:`n$startOut"
-}
+# 2) Extract and accept the license
+tar -xzf mqadv_dev920_ubuntu_x86-64.tar.gz
+cd MQServer
+sudo ./mqlicense.sh -accept
 
-# now you can run your MQSC lines
-"DIS QMGR QMNAME" | runmqsc $QueueManager
+# 3) Install only the CLIENT pieces
+sudo dpkg -i MQSeriesRuntime*.deb MQSeriesClient*.deb MQSeriesSamples*.deb || sudo apt-get -f install -y
+# (Run dpkg line again after -f install if it reported missing deps)
+
+# 4) Make MQ binaries easy to call
+echo 'export PATH=/opt/mqm/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
