@@ -1,30 +1,56 @@
-# 1) Get the MQ for Linux tarball (Developer edition is fine)
-#    (Replace the URL with the current version your team uses)
-cd /tmp
-curl -LO https://public.dhe.ibm.com/ibmdl/export/pub/software/websphere/messaging/mqadv/mqadv_dev920_ubuntu_x86-64.tar.gz
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 
-# 2) Extract and accept the license
-tar -xzf mqadv_dev920_ubuntu_x86-64.tar.gz
-cd MQServer
-sudo ./mqlicense.sh -accept
+public sealed class MessageProcessor
+{
+    private readonly ILogger<MessageProcessor> _log;
+    private readonly IReadOnlyDictionary<string, IMessageHandler> _handlers;
 
-# 3) Install only the CLIENT pieces
-sudo dpkg -i MQSeriesRuntime*.deb MQSeriesClient*.deb MQSeriesSamples*.deb || sudo apt-get -f install -y
-# (Run dpkg line again after -f install if it reported missing deps)
+    private readonly ConcurrentDictionary<string, int> _counts = new();
+    private const int Threshold = 100;
 
-# 4) Make MQ binaries easy to call
-echo 'export PATH=/opt/mqm/bin:$PATH' >> ~/.bashrc
-source ~/.bashrc
+    public MessageProcessor(ILogger<MessageProcessor> log,
+                            IReadOnlyDictionary<string, IMessageHandler> handlers)
+    {
+        _log = log;
+        _handlers = handlers;
+    }
 
+    public async Task OnMessageAsync(ServiceBusReceivedMessage msg, CancellationToken ct)
+    {
+        var type = msg.Subject ?? msg.ContentType ?? "unknown";
 
---------
+        if (_handlers.TryGetValue(type, out var handler))
+        {
+            await handler.HandleAsync(msg, ct);
+            return;
+        }
 
-cd /mnt/c/Users/Lc5745991/MQServer
-sudo ./mqlicense.sh -accept
+        IncrementAndMaybeLog(type, msg.MessageId);
+    }
 
-# install the runtime + client + GSKit + samples
-sudo dpkg -i ibmmq-runtime_9.2.0.0_amd64.deb \
-             ibmmq-gskit_9.2.0.0_amd64.deb \
-             ibmmq-client_9.2.0.0_amd64.deb \
-             ibmmq-samples_9.2.0.0_amd64.deb \
-  || sudo apt-get -f install -y
+    private void IncrementAndMaybeLog(string type, string? messageId)
+    {
+        // Atomic per-key increment
+        int after = _counts.AddOrUpdate(type, 1, static (_, c) => c + 1);
+
+        if (after < Threshold) return;
+
+        // Single logger: try to reset from the currently observed value to 0.
+        // Only one thread will succeed; others will see a changed value and skip.
+        while (true)
+        {
+            if (!_counts.TryGetValue(type, out int observed)) return;     // very unlikely
+            if (observed < Threshold) return;                             // someone else already reset+logged
+
+            if (_counts.TryUpdate(type, 0, observed))
+            {
+                _log.LogWarning(
+                    "Received '{MessageType}' without a processor {Count} times (last MessageId={MessageId}). Counter reset.",
+                    type, observed, messageId);
+                return;
+            }
+            // else: value changed; loop and re-check
+        }
+    }
+}
