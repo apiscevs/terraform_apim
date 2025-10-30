@@ -1,24 +1,3 @@
-# Generate-UpgradeScripts.ps1
-# Run this from your solution root (where the .sln file lives)
-# It will generate "Run-Upgrades.ps1" in the same folder.
-
-$root = Get-Location
-$outputScript = Join-Path $root "Run-Upgrades.ps1"
-
-# Initialize / overwrite the output file
-"#!/usr/bin/env pwsh" | Out-File -FilePath $outputScript -Encoding utf8
-"# Auto-generated upgrade script" | Out-File -FilePath $outputScript -Append
-"" | Out-File -FilePath $outputScript -Append
-
-# Recursively find folders containing a .csproj file
-Get-ChildItem -Directory -Recurse | ForEach-Object {
-    $proj = Get-ChildItem -Path $_.FullName -Filter *.csproj -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($proj) {
-        $relativePath = Resolve-Path -Relative $proj.FullName
-        $command = "upgrade-assistant upgrade `"$relativePath`" --non-interactive"
-        $command | Out-File -FilePath $outputScript -Append
-    }
-}
-
-Write-Host "✅ Generated $outputScript"
-Write-Host "Run it with:  pwsh ./Run-Upgrades.ps1"
+RUN apt-get update \
+ && apt-get install -y dotnet-targeting-pack-6.0 aspnetcore-targeting-pack-6.0 \
+ && rm -rf /var/lib/apt/lists/*
