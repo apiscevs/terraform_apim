@@ -1,56 +1,24 @@
-using System.Collections.Concurrent;
-using Microsoft.Extensions.Logging;
+# Generate-UpgradeScripts.ps1
+# Run this from your solution root (where the .sln file lives)
+# It will generate "Run-Upgrades.ps1" in the same folder.
 
-public sealed class MessageProcessor
-{
-    private readonly ILogger<MessageProcessor> _log;
-    private readonly IReadOnlyDictionary<string, IMessageHandler> _handlers;
+$root = Get-Location
+$outputScript = Join-Path $root "Run-Upgrades.ps1"
 
-    private readonly ConcurrentDictionary<string, int> _counts = new();
-    private const int Threshold = 100;
+# Initialize / overwrite the output file
+"#!/usr/bin/env pwsh" | Out-File -FilePath $outputScript -Encoding utf8
+"# Auto-generated upgrade script" | Out-File -FilePath $outputScript -Append
+"" | Out-File -FilePath $outputScript -Append
 
-    public MessageProcessor(ILogger<MessageProcessor> log,
-                            IReadOnlyDictionary<string, IMessageHandler> handlers)
-    {
-        _log = log;
-        _handlers = handlers;
-    }
-
-    public async Task OnMessageAsync(ServiceBusReceivedMessage msg, CancellationToken ct)
-    {
-        var type = msg.Subject ?? msg.ContentType ?? "unknown";
-
-        if (_handlers.TryGetValue(type, out var handler))
-        {
-            await handler.HandleAsync(msg, ct);
-            return;
-        }
-
-        IncrementAndMaybeLog(type, msg.MessageId);
-    }
-
-    private void IncrementAndMaybeLog(string type, string? messageId)
-    {
-        // Atomic per-key increment
-        int after = _counts.AddOrUpdate(type, 1, static (_, c) => c + 1);
-
-        if (after < Threshold) return;
-
-        // Single logger: try to reset from the currently observed value to 0.
-        // Only one thread will succeed; others will see a changed value and skip.
-        while (true)
-        {
-            if (!_counts.TryGetValue(type, out int observed)) return;     // very unlikely
-            if (observed < Threshold) return;                             // someone else already reset+logged
-
-            if (_counts.TryUpdate(type, 0, observed))
-            {
-                _log.LogWarning(
-                    "Received '{MessageType}' without a processor {Count} times (last MessageId={MessageId}). Counter reset.",
-                    type, observed, messageId);
-                return;
-            }
-            // else: value changed; loop and re-check
-        }
+# Recursively find folders containing a .csproj file
+Get-ChildItem -Directory -Recurse | ForEach-Object {
+    $proj = Get-ChildItem -Path $_.FullName -Filter *.csproj -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($proj) {
+        $relativePath = Resolve-Path -Relative $proj.FullName
+        $command = "upgrade-assistant upgrade `"$relativePath`" --non-interactive"
+        $command | Out-File -FilePath $outputScript -Append
     }
 }
+
+Write-Host "✅ Generated $outputScript"
+Write-Host "Run it with:  pwsh ./Run-Upgrades.ps1"
