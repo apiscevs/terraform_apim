@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][int]$LaRowNumber,
-    [Parameter(Mandatory=$true)][int]$BrRowNumber
+    [Parameter(Mandatory=$true)][int]$BrRowNumber,
+    [Parameter(Mandatory=$true)][int]$MatchCount
 )
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -34,16 +35,20 @@ function Generate-Rows {
     param(
         [int]$RowCount,
         [pscustomobject]$TemplateRow,
-        [string[]]$SecurityIds
+        [string[]]$SecurityIds,
+        [int]$Matches = 0
     )
 
     $rows = @()
     for ($i = 0; $i -lt $RowCount; $i++) {
         $sid = $SecurityIds[$i % $SecurityIds.Count]
+        $isMatch = $i -lt $Matches
+        $minTradeValue = if ($isMatch) { '1000000' } else { '0.0000001' }
         $row = [pscustomobject]@{}
 
         $TemplateRow.PSObject.Properties | ForEach-Object {
             $value = $_.Value -replace '(?i)<securityIdentifier>', [regex]::Escape($sid)
+            $value = $value -replace '(?i)<minimumTradeValue>', $minTradeValue
             $row | Add-Member -NotePropertyName $_.Name -NotePropertyValue $value
         }
 
@@ -62,6 +67,14 @@ if ($securityIds.Count -eq 0) {
     throw "Securities list at $securitiesPath is empty."
 }
 
+if ($MatchCount -lt 0) {
+    throw "MatchCount must be zero or a positive integer."
+}
+
+if ($MatchCount -gt $BrRowNumber) {
+    throw "MatchCount cannot exceed the requested BR row count ($BrRowNumber)."
+}
+
 $laTemplate = Get-TemplateRow -CsvPath $laCsvPath
 $brTemplate = Get-TemplateRow -CsvPath $brCsvPath
 
@@ -70,7 +83,7 @@ if (-not (Test-Path $outputDir)) {
 }
 
 $laRows = Generate-Rows -RowCount $LaRowNumber -TemplateRow $laTemplate -SecurityIds $securityIds
-$brRows = Generate-Rows -RowCount $BrRowNumber -TemplateRow $brTemplate -SecurityIds $securityIds
+$brRows = Generate-Rows -RowCount $BrRowNumber -TemplateRow $brTemplate -SecurityIds $securityIds -Matches $MatchCount
 
 $laOutput = Join-Path $outputDir 'la_output.csv'
 $brOutput = Join-Path $outputDir 'br_output.csv'
