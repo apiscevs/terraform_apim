@@ -22,7 +22,7 @@ function Get-TemplateRow {
         throw "Template CSV at $CsvPath must have a header row and at least one template row."
     }
 
-    $csvRows = Import-Csv -Path $CsvPath
+    $csvRows = @(Import-Csv -Path $CsvPath)
     if ($csvRows.Count -lt 1) {
         throw "Template CSV at $CsvPath must contain a data row with placeholders."
     }
