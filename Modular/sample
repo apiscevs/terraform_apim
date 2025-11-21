@@ -1,8 +1,83 @@
-RUN apt-get update \
- && apt-get install -y wget gnupg \
- && wget https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb \
- && dpkg -i /tmp/packages-microsoft-prod.deb \
- && rm /tmp/packages-microsoft-prod.deb \
- && apt-get update \
- && apt-get install -y dotnet-sdk-6.0 \
- && rm -rf /var/lib/apt/lists/*
+param(
+    [Parameter(Mandatory=$true)][int]$LaRowNumber,
+    [Parameter(Mandatory=$true)][int]$BrRowNumber
+)
+
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$laCsvPath = Join-Path $scriptDir 'la-row-template.csv'
+$brCsvPath = Join-Path $scriptDir 'br-row-template.csv'
+$securitiesPath = Join-Path $scriptDir 'securities.txt'
+$outputDir = Join-Path $scriptDir 'output'
+
+function Get-TemplateRow {
+    param([string]$CsvPath)
+
+    if (-not (Test-Path $CsvPath)) {
+        throw "Template CSV not found at $CsvPath"
+    }
+
+    # Expectation: first physical row defines the columns; second row is the template row.
+    $lineCount = (Get-Content -Path $CsvPath).Count
+    if ($lineCount -lt 2) {
+        throw "Template CSV at $CsvPath must have a header row and at least one template row."
+    }
+
+    $csvRows = Import-Csv -Path $CsvPath
+    if ($csvRows.Count -lt 1) {
+        throw "Template CSV at $CsvPath must contain a data row with placeholders."
+    }
+
+    return $csvRows[0]
+}
+
+function Generate-Rows {
+    param(
+        [int]$RowCount,
+        [pscustomobject]$TemplateRow,
+        [string[]]$SecurityIds
+    )
+
+    $rows = @()
+    for ($i = 0; $i -lt $RowCount; $i++) {
+        $sid = $SecurityIds[$i % $SecurityIds.Count]
+        $row = [pscustomobject]@{}
+
+        $TemplateRow.PSObject.Properties | ForEach-Object {
+            $value = $_.Value -replace '(?i)<securityIdentifier>', [regex]::Escape($sid)
+            $row | Add-Member -NotePropertyName $_.Name -NotePropertyValue $value
+        }
+
+        $rows += $row
+    }
+
+    return $rows
+}
+
+if (-not (Test-Path $securitiesPath)) {
+    throw "Securities list not found at $securitiesPath"
+}
+
+$securityIds = Get-Content -Path $securitiesPath | Where-Object { $_.Trim() -ne '' }
+if ($securityIds.Count -eq 0) {
+    throw "Securities list at $securitiesPath is empty."
+}
+
+$laTemplate = Get-TemplateRow -CsvPath $laCsvPath
+$brTemplate = Get-TemplateRow -CsvPath $brCsvPath
+
+if (-not (Test-Path $outputDir)) {
+    New-Item -ItemType Directory -Path $outputDir | Out-Null
+}
+
+$laRows = Generate-Rows -RowCount $LaRowNumber -TemplateRow $laTemplate -SecurityIds $securityIds
+$brRows = Generate-Rows -RowCount $BrRowNumber -TemplateRow $brTemplate -SecurityIds $securityIds
+
+$laOutput = Join-Path $outputDir 'la_output.csv'
+$brOutput = Join-Path $outputDir 'br_output.csv'
+
+$laRows | Export-Csv -Path $laOutput -NoTypeInformation
+$brRows | Export-Csv -Path $brOutput -NoTypeInformation
+
+Write-Host "Generated files:" -ForegroundColor Green
+Write-Host "  LA -> $laOutput"
+Write-Host "  BR -> $brOutput"
