@@ -1,96 +1,12 @@
-param(
-    [Parameter(Mandatory=$true)][int]$LaRowNumber,
-    [Parameter(Mandatory=$true)][int]$BrRowNumber,
-    [Parameter(Mandatory=$true)][int]$MatchCount
-)
+Hi everyone,
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$laCsvPath = Join-Path $scriptDir 'la-row-template.csv'
-$brCsvPath = Join-Path $scriptDir 'br-row-template.csv'
-$securitiesPath = Join-Path $scriptDir 'securities.txt'
-$outputDir = Join-Path $scriptDir 'output'
+As the year comes to an end, my time working with you is most likely coming to a close as well. While nothing is fully set in stone yet, it looks like my contract will end at the end of the year, so I wanted to take the opportunity to say thank you.
 
-function Get-TemplateRow {
-    param([string]$CsvPath)
+It really was a great time working with you all. Despite already being pretty much “old” by tech standards, I’m genuinely glad I still had the opportunity to learn a few new things along the way — and to be part of the preparations for what’s coming next.
 
-    if (-not (Test-Path $CsvPath)) {
-        throw "Template CSV not found at $CsvPath"
-    }
+I appreciate the collaboration and the conversations we’ve had over the past year, and I wish you all the best as the work continues. Hopefully our paths cross again somewhere down the line.
 
-    # Expectation: first physical row defines the columns; second row is the template row.
-    $lineCount = (Get-Content -Path $CsvPath).Count
-    if ($lineCount -lt 2) {
-        throw "Template CSV at $CsvPath must have a header row and at least one template row."
-    }
+On the brighter side, there will be no more broken builds coming from my side 😄
 
-    $csvRows = @(Import-Csv -Path $CsvPath)
-    if ($csvRows.Count -lt 1) {
-        throw "Template CSV at $CsvPath must contain a data row with placeholders."
-    }
-
-    return $csvRows[0]
-}
-
-function Generate-Rows {
-    param(
-        [int]$RowCount,
-        [pscustomobject]$TemplateRow,
-        [string[]]$SecurityIds,
-        [int]$Matches = 0
-    )
-
-    $rows = @()
-    for ($i = 0; $i -lt $RowCount; $i++) {
-        $sid = $SecurityIds[$i % $SecurityIds.Count]
-        $isMatch = $i -lt $Matches
-        $minTradeValue = if ($isMatch) { '1000000' } else { '0.0000001' }
-        $row = [pscustomobject]@{}
-
-        $TemplateRow.PSObject.Properties | ForEach-Object {
-            $value = $_.Value -replace '(?i)<securityIdentifier>', [regex]::Escape($sid)
-            $value = $value -replace '(?i)<minimumTradeValue>', $minTradeValue
-            $row | Add-Member -NotePropertyName $_.Name -NotePropertyValue $value
-        }
-
-        $rows += $row
-    }
-
-    return $rows
-}
-
-if (-not (Test-Path $securitiesPath)) {
-    throw "Securities list not found at $securitiesPath"
-}
-
-$securityIds = Get-Content -Path $securitiesPath | Where-Object { $_.Trim() -ne '' }
-if ($securityIds.Count -eq 0) {
-    throw "Securities list at $securitiesPath is empty."
-}
-
-if ($MatchCount -lt 0) {
-    throw "MatchCount must be zero or a positive integer."
-}
-
-if ($MatchCount -gt $BrRowNumber) {
-    throw "MatchCount cannot exceed the requested BR row count ($BrRowNumber)."
-}
-
-$laTemplate = Get-TemplateRow -CsvPath $laCsvPath
-$brTemplate = Get-TemplateRow -CsvPath $brCsvPath
-
-if (-not (Test-Path $outputDir)) {
-    New-Item -ItemType Directory -Path $outputDir | Out-Null
-}
-
-$laRows = Generate-Rows -RowCount $LaRowNumber -TemplateRow $laTemplate -SecurityIds $securityIds
-$brRows = Generate-Rows -RowCount $BrRowNumber -TemplateRow $brTemplate -SecurityIds $securityIds -Matches $MatchCount
-
-$laOutput = Join-Path $outputDir 'la_output.csv'
-$brOutput = Join-Path $outputDir 'br_output.csv'
-
-$laRows | Export-Csv -Path $laOutput -NoTypeInformation
-$brRows | Export-Csv -Path $brOutput -NoTypeInformation
-
-Write-Host "Generated files:" -ForegroundColor Green
-Write-Host "  LA -> $laOutput"
-Write-Host "  BR -> $brOutput"
+All the best,
+[Your Name]
